@@ -1,7 +1,10 @@
-import { app, BrowserWindow, Menu, Tray, clipboard, dialog, ipcMain, nativeImage, net, protocol, shell } from "electron";
+import { app, BrowserWindow, Menu, Tray, clipboard, dialog, ipcMain, nativeImage, nativeTheme, net, protocol, shell } from "electron";
 import { basename, extname, join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { AgentHost } from "./agent-host";
+import { DesktopController } from "./desktop";
+import { DESKTOP_RELEASES, GROK_INSTALL_GUIDE } from "../shared/desktop";
 import { copyImageToClipboard, imageDataUrl, inspectPaths, saveAudioBytes, saveClipboardImage } from "./attachments";
 import { isGrokSettingKey } from "../shared/grok-settings";
 import type { GroupSort, MediaKind, PromptAttachment, SessionMode, SessionRef, SessionSort } from "../shared/types";
@@ -13,6 +16,13 @@ import {
   pathFromMediaUrl,
   saveTranscript,
 } from "./media-library";
+
+const profileDirectory = app.commandLine.getSwitchValue("user-data-dir");
+if (profileDirectory) {
+  mkdirSync(profileDirectory, { recursive: true });
+  app.setPath("userData", profileDirectory);
+}
+if (!app.requestSingleInstanceLock()) app.exit(0);
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -29,9 +39,28 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const host = new AgentHost();
+const desktop = new DesktopController();
 let mainWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let quitting = false;
+let shutdownComplete = false;
+let shutdownPromise: Promise<void> | undefined;
+
+function shutdown(): Promise<void> {
+  if (!shutdownPromise) {
+    quitting = true;
+    desktop.dispose();
+    shutdownPromise = host.stop().finally(() => { shutdownComplete = true; });
+  }
+  return shutdownPromise;
+}
+
+function hasActiveWork(): boolean {
+  const state = host.getSnapshot();
+  return state.busy || state.backgroundTasks.length > 0 || state.sessions.some((session) => session.running);
+}
+
+app.on("second-instance", () => { if (app.isReady()) showWindow(); });
 
 function iconDir(): string {
   return join(app.getAppPath(), "resources");
@@ -50,6 +79,7 @@ function showWindow(): void {
     createWindow();
     return;
   }
+  if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
 }
@@ -73,11 +103,14 @@ function createTray(): void {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "显示窗口", click: () => showWindow() },
+      { label: "桌面应用与更新", click: () => {
+        showWindow();
+        mainWindow?.webContents.send("desktop:open");
+      } },
       { type: "separator" },
       {
         label: "退出",
         click: () => {
-          quitting = true;
           app.quit();
         },
       },
@@ -92,7 +125,13 @@ function createWindow(): void {
     height: 840,
     minWidth: 880,
     minHeight: 560,
-    backgroundColor: "#f5f5f7",
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#181818" : "#ffffff",
+    titleBarStyle: "hidden",
+    titleBarOverlay: process.platform === "win32" ? {
+      color: nativeTheme.shouldUseDarkColors ? "#181818" : "#ffffff",
+      symbolColor: nativeTheme.shouldUseDarkColors ? "#dfdfdf" : "#1a1c1f",
+      height: 44,
+    } : undefined,
     autoHideMenuBar: process.platform !== "darwin",
     icon: icon.isEmpty() ? undefined : icon,
     webPreferences: {
@@ -124,6 +163,17 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  const syncWindowTheme = () => {
+    const dark = nativeTheme.shouldUseDarkColors;
+    mainWindow?.setBackgroundColor(dark ? "#181818" : "#ffffff");
+    if (process.platform === "win32") mainWindow?.setTitleBarOverlay({ color: dark ? "#181818" : "#ffffff", symbolColor: dark ? "#dfdfdf" : "#1a1c1f", height: 44 });
+  };
+  nativeTheme.on("updated", syncWindowTheme);
+  ipcMain.handle("window:setTheme", (_event, theme: unknown) => {
+    if (theme !== "system" && theme !== "light" && theme !== "dark") return;
+    nativeTheme.themeSource = theme;
+    syncWindowTheme();
+  });
   if (process.platform === "win32") app.setAppUserModelId("ai.x.grok-harness");
   protocol.handle("grok-media", (request) => {
     try {
@@ -137,6 +187,7 @@ app.whenReady().then(async () => {
     }
   });
   createMenu();
+  await desktop.init();
   await host.initLocal();
   createTray();
   createWindow();
@@ -145,6 +196,47 @@ app.whenReady().then(async () => {
     const win = mainWindow;
     if (!win || win.isDestroyed()) return;
     win.webContents.send("grok:event", event);
+  });
+
+  let hadCredentials = desktop.getState().cli.authenticated;
+  desktop.onChange((state) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("desktop:state", state);
+    if (state.cli.authenticated && !hadCredentials) void host.refreshConnection().catch(() => undefined);
+    hadCredentials = state.cli.authenticated;
+  });
+  ipcMain.handle("desktop:getState", () => desktop.getState());
+  ipcMain.handle("desktop:refresh", async () => {
+    const state = await desktop.checkCli();
+    if (state.cli.installed && state.cli.authenticated) await host.refreshConnection().catch(() => undefined);
+    return state;
+  });
+  ipcMain.handle("desktop:chooseBinary", async () => {
+    if (hasActiveWork()) throw new Error("请等待当前对话和后台任务结束后再切换 Grok 程序。");
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: "选择官方 grok.exe", properties: ["openFile"], filters: [{ name: "Grok CLI", extensions: ["exe"] }],
+    });
+    if (result.canceled || !result.filePaths[0]) return desktop.getState();
+    const state = await desktop.useBinary(result.filePaths[0]);
+    if (state.cli.installed) {
+      await host.stop();
+      if (state.cli.authenticated) await host.refreshConnection().catch(() => undefined);
+    }
+    return state;
+  });
+  ipcMain.handle("desktop:login", () => desktop.login());
+  ipcMain.handle("desktop:cancelLogin", () => desktop.cancelLogin());
+  ipcMain.handle("desktop:checkUpdate", () => desktop.checkUpdate());
+  ipcMain.handle("desktop:downloadUpdate", () => desktop.downloadUpdate());
+  ipcMain.handle("desktop:installUpdate", async () => {
+    if (hasActiveWork()) throw new Error("请等待当前对话和后台任务结束后再重启更新。");
+    if (desktop.getState().update.phase !== "downloaded") return;
+    await shutdown();
+    desktop.installUpdate();
+  });
+  ipcMain.handle("desktop:openLink", (_event, link: unknown) => {
+    if (link !== "releases" && link !== "install") return false;
+    void shell.openExternal(link === "releases" ? DESKTOP_RELEASES : GROK_INSTALL_GUIDE);
+    return true;
   });
 
   ipcMain.handle("grok:getState", () => host.getSnapshot());
@@ -525,8 +617,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", (event) => {
-  if (quitting) return;
+  if (shutdownComplete) return;
   event.preventDefault();
-  quitting = true;
-  void host.stop().finally(() => app.quit());
+  void shutdown().finally(() => app.quit());
 });

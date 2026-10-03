@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { BrowserWindow, Notification } from "electron";
+import { app, BrowserWindow, Notification } from "electron";
 import { ABSORBED_BY_STREAM, AcpClient } from "../shared/acp-client";
 import type {
   AgentUiEvent,
@@ -185,10 +185,20 @@ function parseBackgroundTask(raw: unknown): BackgroundTask | undefined {
 export class AgentHost {
   private serve: ServeHandle | undefined;
   private client: AcpClient | undefined;
+  private connectionPromise?: Promise<AcpClient>;
+  private connectionAbort?: AbortController;
   private grokBinary?: string;
   private db = new LocalDb();
   private listeners = new Set<(event: AgentUiEvent) => void>();
   private hydrating = false;
+  private sessionLoadEpoch = 0;
+  private loadingSessionId?: string;
+  private seenSessionEventIds = new Set<string>();
+  private hydrationUpdates: Array<{
+    update: Record<string, unknown>;
+    meta?: Record<string, unknown>;
+    sessionId?: string;
+  }> = [];
   private drainingQueue = false;
   private promptEpoch = 0;
   private ignoreUpdates = false;
@@ -972,7 +982,20 @@ export class AgentHost {
     return fetchQuota();
   }
 
-  private async ensureConnected(alwaysApprove = this.snapshot.alwaysApprove): Promise<AcpClient> {
+  private ensureConnected(alwaysApprove = this.snapshot.alwaysApprove): Promise<AcpClient> {
+    if (this.connectionPromise) return this.connectionPromise;
+    const controller = new AbortController();
+    this.connectionAbort = controller;
+    this.connectionPromise = this.connectAgent(alwaysApprove, controller.signal).finally(() => {
+      if (this.connectionAbort === controller) {
+        this.connectionPromise = undefined;
+        this.connectionAbort = undefined;
+      }
+    });
+    return this.connectionPromise;
+  }
+
+  private async connectAgent(alwaysApprove: boolean, signal: AbortSignal): Promise<AcpClient> {
     if (this.client?.connected) {
       this.patch({ connection: "ready", alwaysApprove, error: undefined });
       return this.client;
@@ -991,7 +1014,7 @@ export class AgentHost {
     const binary = resolveGrokBinary();
     this.grokBinary = binary;
     this.patch({ grokBinary: binary });
-    this.serve = await startGrokServe(binary);
+    this.serve = await startGrokServe(binary, signal);
     const client = new AcpClient({
       onNotification: (method, params) => this.onNotification(method, params),
       onRequest: (id, method, params) => this.onRequest(id, method, params),
@@ -1008,7 +1031,7 @@ export class AgentHost {
     const init = asRecord(
       await client.request("initialize", {
         protocolVersion: 1,
-        clientInfo: { name: "grok-harness", version: "0.5.0" },
+        clientInfo: { name: "grok-harness", version: app.getVersion() },
         clientCapabilities: {
           fs: { readTextFile: false, writeTextFile: false },
           terminal: false,
@@ -1034,6 +1057,7 @@ export class AgentHost {
       await client.request("authenticate", { methodId: "cached_token" }),
     );
     const authMeta = asRecord(auth?._meta);
+    if (signal.aborted) throw new Error("Grok connection cancelled");
 
     this.patch({
       connection: "ready",
@@ -1145,12 +1169,20 @@ export class AgentHost {
     }
   }
 
+  async refreshConnection(): Promise<void> {
+    await this.ensureConnected();
+    await this.refreshAccount();
+  }
+
   async stop(): Promise<void> {
+    const connecting = this.connectionPromise;
+    this.connectionAbort?.abort();
     for (const waiter of this.permissionWaiters.values()) waiter.resolve(null);
     this.permissionWaiters.clear();
     this.client?.close();
     this.client = undefined;
     await stopGrokServe(this.serve?.child);
+    await connecting?.catch(() => undefined);
     this.serve = undefined;
     this.clearLiveTasks();
     if (this.snapshot.connection !== "error") {
@@ -1460,6 +1492,10 @@ export class AgentHost {
   }
 
   async openSession(sessionId: string, cwd?: string): Promise<void> {
+    // Selecting the current row must not cancel the turn or reload its live view.
+    if ((sessionId === this.snapshot.sessionId && this.snapshot.busy) || this.loadingSessionId === sessionId) return;
+    const loadEpoch = ++this.sessionLoadEpoch;
+    this.loadingSessionId = sessionId;
     if (this.snapshot.busy) {
       try {
         await this.cancel();
@@ -1467,10 +1503,17 @@ export class AgentHost {
         /* continue */
       }
     }
+    if (loadEpoch !== this.sessionLoadEpoch) return;
     const known = this.snapshot.sessions.find((row) => row.sessionId === sessionId);
     const workspace = cwd || known?.cwd;
     this.db.markRead(sessionId, Math.max(Date.now(), known?.updatedAtMs ?? 0));
-    const timeline = await loadSessionTranscript(sessionId, workspace);
+    this.ignoreUpdates = false;
+    this.hydrating = true;
+    this.hydrationUpdates = [];
+    const eventIds = new Set<string>();
+    const timeline = await loadSessionTranscript(sessionId, workspace, eventIds);
+    if (loadEpoch !== this.sessionLoadEpoch) return;
+    this.seenSessionEventIds = eventIds;
     this.statsCursor = {};
     this.patch({
       workspace,
@@ -1487,7 +1530,7 @@ export class AgentHost {
     });
     try {
       const client = await this.ensureConnected();
-      this.hydrating = true;
+      if (loadEpoch !== this.sessionLoadEpoch) return;
       try {
         const loaded = asRecord(
           await client.request("session/load", {
@@ -1496,12 +1539,20 @@ export class AgentHost {
             ...(workspace ? { cwd: workspace } : {}),
           }),
         );
+        if (loadEpoch !== this.sessionLoadEpoch) return;
         const loadedMeta = asRecord(loaded?._meta);
+        // A running agent can append output while session/load replays history.
+        // Re-read the durable log, then apply only buffered events absent from it.
+        const latestEventIds = new Set<string>();
+        const latestTimeline = await loadSessionTranscript(sessionId, workspace, latestEventIds);
+        if (loadEpoch !== this.sessionLoadEpoch) return;
+        this.seenSessionEventIds = latestEventIds;
         this.patch({
           connection: "ready",
           sessionId: asString(loaded?.sessionId) ?? sessionId,
           workspace: workspace ?? this.snapshot.workspace,
           sessionTitle: known?.title ?? this.snapshot.sessionTitle,
+          timeline: latestTimeline,
           commands: mergeSlashCommands(
             this.snapshot.commands,
             parseSlashCommands(loaded?.availableCommands),
@@ -1509,13 +1560,22 @@ export class AgentHost {
           ),
         });
       } finally {
-        this.hydrating = false;
+        if (loadEpoch === this.sessionLoadEpoch) {
+          this.hydrating = false;
+          const updates = this.hydrationUpdates;
+          this.hydrationUpdates = [];
+          for (const row of updates) this.applySessionUpdate(row.update, row.meta, row.sessionId);
+        }
       }
     } catch (err) {
+      if (loadEpoch !== this.sessionLoadEpoch) return;
       this.hydrating = false;
+      this.hydrationUpdates = [];
       this.fail(err instanceof Error ? err.message : String(err));
       throw err;
     } finally {
+      if (loadEpoch !== this.sessionLoadEpoch) return;
+      this.loadingSessionId = undefined;
       this.db.markRead(sessionId, Date.now());
       await this.loadLocalSessions();
     }
@@ -1554,6 +1614,15 @@ export class AgentHost {
       this.applySessionUpdate(update, asRecord(rec._meta), asString(rec.sessionId));
       return;
     }
+    if (/^(?:_x\.ai|x\.ai)\/session\/prompt_complete$/.test(method)) {
+      const rec = asRecord(params) ?? {};
+      this.applySessionUpdate({
+        sessionUpdate: "turn_completed",
+        stop_reason: rec.stopReason,
+        agent_result: rec.agentResult,
+      }, asRecord(rec._meta), asString(rec.sessionId));
+      return;
+    }
     if (method.startsWith("x.ai/") || method.startsWith("_x.ai/")) {
       return;
     }
@@ -1569,6 +1638,16 @@ export class AgentHost {
       if (!this.hydrating) this.applyBackgroundTaskUpdate(kind, update, sessionId);
       return;
     }
+    if (sessionId && sessionId !== this.snapshot.sessionId) return;
+    if (this.hydrating) {
+      this.hydrationUpdates.push({ update, meta: envelopeMeta, sessionId });
+      return;
+    }
+    const eventId = asString(envelopeMeta?.eventId);
+    if (eventId) {
+      if (this.seenSessionEventIds.has(eventId)) return;
+      this.seenSessionEventIds.add(eventId);
+    }
     const stats = readEventStats(update, envelopeMeta, Date.now());
     if (this.ignoreUpdates && !this.hydrating) {
       if (kind === "available_commands" || kind === "available_commands_update") {
@@ -1581,16 +1660,16 @@ export class AgentHost {
       }
       return;
     }
-    if (this.hydrating) {
-      if (kind === "available_commands" || kind === "available_commands_update") {
-        this.patch({
-          commands: mergeSlashCommands(
-            this.snapshot.commands,
-            parseSlashCommands(update.availableCommands ?? update.commands ?? update),
-          ),
-        });
+    if (kind === "turn_completed") {
+      const reason = asString(update.stop_reason) ?? asString(update.stopReason);
+      if (reason === "error") {
+        this.pushItem({ id: randomUUID(), kind: "system", tone: "error", text: asString(update.agent_result) ?? asString(update.agentResult) ?? "Grok 本轮执行失败" });
       }
+      this.finishStreaming();
       return;
+    }
+    if ((kind === "agent_message_chunk" || kind === "agent_thought_chunk" || kind === "tool_call") && !this.snapshot.busy) {
+      this.patch({ busy: true, runStats: { ...this.snapshot.runStats, turnStartedAt: Date.now() } });
     }
     if (kind === "user_message_chunk") {
       const text = normalizeUserText(collectText(update.content ?? update));
@@ -1716,8 +1795,8 @@ export class AgentHost {
     totalTokens?: number,
   ): void {
     if (!text) return;
-    const last = [...this.snapshot.timeline].reverse().find((item) => item.kind === kind && item.streaming);
-    if (last && last.kind === kind) {
+    const last = this.snapshot.timeline[this.snapshot.timeline.length - 1];
+    if (last && last.kind === kind && last.streaming) {
       this.touch(last, at, totalTokens);
       this.patchItem(last.id, {
         text: last.text + text,
@@ -1731,7 +1810,7 @@ export class AgentHost {
     this.snapshot = {
       ...this.snapshot,
       timeline: this.snapshot.timeline.map((item) =>
-        item.kind === kind && "streaming" in item && item.streaming
+        (item.kind === "assistant" || item.kind === "thought") && item.streaming
           ? { ...item, streaming: false }
           : item,
       ),

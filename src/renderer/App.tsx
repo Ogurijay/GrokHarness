@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -7,15 +7,12 @@ import type {
   AppSnapshot,
   BackgroundTask,
   GroupSort,
-  MentionHit,
-  ModelInfo,
   PermissionRequest,
   ComposerSubmitPayload,
   PromptAttachment,
   SessionRef,
   SessionSort,
   SessionSummary,
-  SlashCommand,
   TimelineItem,
   ToolDiff,
 } from "../shared/types";
@@ -23,13 +20,17 @@ import { normalizeGroupKey } from "../shared/types";
 import { CodeView, prettyUnknown } from "./CodeView";
 import { formatDuration, formatElapsedClock, formatSessionElapsed, formatTokens } from "../shared/step-stats";
 import { GROK_SETTINGS_DEFAULTS } from "../shared/grok-settings";
-import { ModelEffortPicker } from "./ModelEffortPicker";
+import { ComposerPane } from "./ComposerPane";
 import { SettingsPanel } from "./SettingsPanel";
 import { UpdatePanel } from "./UpdatePanel";
+import { DesktopPanel } from "./DesktopPanel";
 import { UsagePanel } from "./UsagePanel";
 import { MediaStudio, type StudioTab } from "./MediaStudio";
-import { useImeEnterGuard } from "./ime";
-import { AttachIcon, ComposerSubmit } from "./composer-controls";
+import { Image as ImageIcon, Mic, MoreHorizontal, PanelLeft, PanelRight, Plus, Search, Settings as SettingsIcon, Video, FolderOpen, FolderClosed, ChevronsDown, ChevronsUp, ListFilter } from "lucide-react";
+import { SidebarNavigation } from "./ui/SidebarNavigation";
+import { SearchDialog } from "./ui/SearchDialog";
+import { Dialog } from "./ui/Dialog";
+import { useAppearance } from "./ui/appearance";
 
 const empty: AppSnapshot = {
   connection: "idle",
@@ -108,47 +109,6 @@ function Spinner({ size = 12 }: { size?: number }) {
   );
 }
 
-function ExpandAllIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path
-        d="M3.2 5.2 8 10l4.8-4.8M3.2 9.2 8 14l4.8-4.8"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function CollapseAllIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path
-        d="M3.2 6.8 8 2l4.8 4.8M3.2 10.8 8 6l4.8 4.8"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function SortIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path
-        d="M4 5h8M4 8h5.5M4 11h3"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
 function FoldChevron({ open = false }: { open?: boolean }) {
   return (
     <svg
@@ -203,89 +163,6 @@ function PinIcon({ filled = false }: { filled?: boolean }) {
         strokeLinejoin="round"
       />
     </svg>
-  );
-}
-
-function MentionMenu({
-  hits,
-  activeIndex,
-  onPick,
-}: {
-  hits: MentionHit[];
-  activeIndex: number;
-  onPick: (hit: MentionHit) => void;
-}) {
-  const activeRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const item = activeRef.current;
-    const menu = item?.closest(".slash-menu");
-    if (!item || !(menu instanceof HTMLElement)) return;
-    const itemRect = item.getBoundingClientRect();
-    const menuRect = menu.getBoundingClientRect();
-    if (itemRect.top < menuRect.top) menu.scrollTop -= menuRect.top - itemRect.top;
-    else if (itemRect.bottom > menuRect.bottom) menu.scrollTop += itemRect.bottom - menuRect.bottom;
-  }, [activeIndex, hits]);
-  return (
-    <div className="slash-menu mention-menu" role="listbox">
-      {hits.map((hit, index) => (
-        <button
-          key={hit.id}
-          ref={index === activeIndex ? activeRef : undefined}
-          type="button"
-          role="option"
-          aria-selected={index === activeIndex}
-          className={`slash-item ${index === activeIndex ? "active" : ""}`}
-          onMouseDown={(event) => {
-            event.preventDefault();
-            onPick(hit);
-          }}
-        >
-          <code>{hit.kind === "session" ? "对话" : "文件"}</code>
-          <span>{hit.label}</span>
-          {hit.detail ? <em>{hit.detail}</em> : null}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function ComposerChips({
-  attachments,
-  sessionRefs,
-  onRemoveAttachment,
-  onRemoveSession,
-}: {
-  attachments: PromptAttachment[];
-  sessionRefs: SessionRef[];
-  onRemoveAttachment: (id: string) => void;
-  onRemoveSession: (sessionId: string) => void;
-}) {
-  if (!attachments.length && !sessionRefs.length) return null;
-  return (
-    <div className="composer-chips">
-      {attachments.map((item) => (
-        <div className={`attach-chip ${item.kind}`} key={item.id} title={item.path}>
-          {item.kind === "image" && item.preview ? (
-            <img src={item.preview} alt="" />
-          ) : (
-            <span className="attach-kind">{item.kind === "image" ? "图" : "文件"}</span>
-          )}
-          <span className="attach-name">{item.name}</span>
-          <button type="button" className="chip-clear" title="移除" onClick={() => onRemoveAttachment(item.id)}>
-            ×
-          </button>
-        </div>
-      ))}
-      {sessionRefs.map((item) => (
-        <div className="attach-chip session" key={item.sessionId} title={item.cwd || item.sessionId}>
-          <span className="attach-kind">对话</span>
-          <span className="attach-name">{item.title}</span>
-          <button type="button" className="chip-clear" title="移除" onClick={() => onRemoveSession(item.sessionId)}>
-            ×
-          </button>
-        </div>
-      ))}
-    </div>
   );
 }
 
@@ -521,372 +398,6 @@ function useNow(active: boolean, interval = 500): number {
   }, [active, interval]);
   return active ? now : Date.now();
 }
-
-function SlashMenu({
-  commands,
-  activeIndex,
-  onPick,
-}: {
-  commands: SlashCommand[];
-  activeIndex: number;
-  onPick: (name: string) => void;
-}) {
-  const activeRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const item = activeRef.current;
-    const menu = item?.closest(".slash-menu");
-    if (!item || !(menu instanceof HTMLElement)) return;
-    const itemRect = item.getBoundingClientRect();
-    const menuRect = menu.getBoundingClientRect();
-    if (itemRect.top < menuRect.top) menu.scrollTop -= menuRect.top - itemRect.top;
-    else if (itemRect.bottom > menuRect.bottom) menu.scrollTop += itemRect.bottom - menuRect.bottom;
-  }, [activeIndex, commands]);
-  return (
-    <div className="slash-menu" role="listbox">
-      {commands.map((command, index) => (
-        <button
-          key={command.name}
-          ref={index === activeIndex ? activeRef : undefined}
-          type="button"
-          role="option"
-          aria-selected={index === activeIndex}
-          className={`slash-item ${index === activeIndex ? "active" : ""}`}
-          onMouseDown={(event) => {
-            event.preventDefault();
-            onPick(command.name);
-          }}
-        >
-          <code>/{command.name}</code>
-          <span>{command.description}</span>
-          {command.hint ? <em>{command.hint}</em> : null}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-const ComposerPane = memo(function ComposerPane({
-  className,
-  busy,
-  commands,
-  models,
-  modelId,
-  effort,
-  placeholder,
-  rows,
-  extraToolbar,
-  injectText,
-  onSend,
-  onStop,
-  onEmptyEnter,
-  onModelEffort,
-  onInjectConsumed,
-}: {
-  className?: string;
-  busy: boolean;
-  commands: SlashCommand[];
-  models: ModelInfo[];
-  modelId?: string;
-  effort?: string;
-  placeholder: string;
-  rows: number;
-  extraToolbar?: ReactNode;
-  injectText?: string;
-  onSend: (payload: ComposerSubmitPayload) => Promise<void>;
-  onStop: () => Promise<void>;
-  onEmptyEnter?: () => Promise<void>;
-  onModelEffort: (modelId: string, effort?: string) => void;
-  onInjectConsumed?: () => void;
-}) {
-  const [draft, setDraft] = useState("");
-  const [attachments, setAttachments] = useState<PromptAttachment[]>([]);
-  const [sessionRefs, setSessionRefs] = useState<SessionRef[]>([]);
-  const [mentionHits, setMentionHits] = useState<MentionHit[]>([]);
-  const [mentionIndex, setMentionIndex] = useState(0);
-  const [slashIndex, setSlashIndex] = useState(0);
-  const [dropping, setDropping] = useState(false);
-  const { shouldHoldEnter, onCompositionEnd } = useImeEnterGuard();
-
-  const slashQuery = useMemo(() => {
-    const match = draft.match(/^\/([^\s]*)$/);
-    return match ? match[1].toLowerCase() : null;
-  }, [draft]);
-  const slashHits = useMemo(() => {
-    if (slashQuery == null) return [];
-    return commands.filter((command) => command.name.toLowerCase().includes(slashQuery)).slice(0, 14);
-  }, [slashQuery, commands]);
-  const mentionQuery = useMemo(() => {
-    if (slashQuery != null) return null;
-    const match = draft.match(/(^|\s)@([^\s]*)$/);
-    return match ? match[2] : null;
-  }, [draft, slashQuery]);
-
-  useEffect(() => {
-    setSlashIndex(0);
-  }, [slashQuery]);
-
-  useEffect(() => {
-    if (!injectText) return;
-    setDraft((value) => {
-      const pad = !value || /\s$/.test(value) ? "" : " ";
-      return `${value}${pad}${injectText}`;
-    });
-    onInjectConsumed?.();
-  }, [injectText, onInjectConsumed]);
-
-  useEffect(() => {
-    setMentionIndex(0);
-    if (mentionQuery == null) {
-      setMentionHits([]);
-      return;
-    }
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void window.grok.searchMentions(mentionQuery).then((hits) => {
-        if (!cancelled) setMentionHits(hits);
-      });
-    }, 80);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [mentionQuery]);
-
-  function mergeAttachments(rows: PromptAttachment[]) {
-    setAttachments((prev) => {
-      const seen = new Set(prev.map((item) => item.path));
-      const next = [...prev];
-      for (const row of rows) {
-        if (seen.has(row.path) || next.length >= 20) continue;
-        seen.add(row.path);
-        next.push(row);
-      }
-      return next;
-    });
-  }
-
-  async function addPaths(paths: string[]) {
-    if (!paths.length) return;
-    const rows = await window.grok.inspectPaths(paths);
-    if (rows.length) mergeAttachments(rows);
-  }
-
-  async function pickAttachments() {
-    const rows = await window.grok.pickFiles();
-    if (rows.length) mergeAttachments(rows);
-  }
-
-  async function pickMention(hit: MentionHit) {
-    setMentionHits([]);
-    setDraft((value) => value.replace(/(^|\s)@[^\s]*$/, "$1"));
-    if (hit.kind === "file" && hit.path) {
-      await addPaths([hit.path]);
-      return;
-    }
-    if (hit.kind === "session" && hit.sessionId) {
-      const ref: SessionRef = { sessionId: hit.sessionId, title: hit.label, cwd: hit.cwd };
-      setSessionRefs((prev) => (prev.some((item) => item.sessionId === ref.sessionId) ? prev : [...prev, ref].slice(0, 5)));
-    }
-  }
-
-  async function onComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const fileList = event.clipboardData?.files;
-    const paths: string[] = [];
-    if (fileList?.length) {
-      for (const file of fileList) {
-        const path = (file as File & { path?: string }).path;
-        if (path) paths.push(path);
-      }
-    }
-    if (paths.length) {
-      event.preventDefault();
-      await addPaths(paths);
-      return;
-    }
-    const items = event.clipboardData?.items;
-    const hasImage = items ? [...items].some((item) => item.type.startsWith("image/")) : false;
-    if (!hasImage) return;
-    event.preventDefault();
-    const shot = await window.grok.saveClipboardImage();
-    if (shot) mergeAttachments([shot]);
-  }
-
-  function onComposerDragOver(event: DragEvent<HTMLDivElement>) {
-    if (![...event.dataTransfer.types].includes("Files")) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
-    setDropping(true);
-  }
-
-  async function onComposerDrop(event: DragEvent<HTMLDivElement>) {
-    event.preventDefault();
-    setDropping(false);
-    const paths = [...event.dataTransfer.files]
-      .map((file) => (file as File & { path?: string }).path)
-      .filter((path): path is string => Boolean(path));
-    await addPaths(paths);
-  }
-
-  function completeSlash(name: string) {
-    const command = commands.find((item) => item.name === name);
-    setDraft(command?.hint ? `/${name} ` : `/${name}`);
-  }
-
-  function insertComposerNewline(event: KeyboardEvent<HTMLTextAreaElement>) {
-    event.preventDefault();
-    const el = event.currentTarget;
-    const start = el.selectionStart ?? draft.length;
-    const end = el.selectionEnd ?? draft.length;
-    const next = `${draft.slice(0, start)}\n${draft.slice(end)}`;
-    setDraft(next);
-    requestAnimationFrame(() => {
-      el.selectionStart = el.selectionEnd = start + 1;
-    });
-  }
-
-  const emptyComposer = !draft.trim() && !attachments.length && !sessionRefs.length;
-
-  async function submit(now = false) {
-    if (busy && !now && emptyComposer) {
-      await onEmptyEnter?.();
-      return;
-    }
-    if (emptyComposer) return;
-    const pendingFiles = attachments;
-    const pendingRefs = sessionRefs;
-    const text = draft.trim();
-    setDraft("");
-    setAttachments([]);
-    setSessionRefs([]);
-    setMentionHits([]);
-    try {
-      await onSend({ text, attachments: pendingFiles, sessionRefs: pendingRefs, now });
-    } catch {
-      setDraft(text);
-      setAttachments(pendingFiles);
-      setSessionRefs(pendingRefs);
-    }
-  }
-
-  async function onComposerKey(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (shouldHoldEnter(event)) return;
-    const newline = event.key === "Enter" && (event.ctrlKey || event.metaKey);
-    const plainEnter = event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey;
-    if (newline) {
-      insertComposerNewline(event);
-      return;
-    }
-    if (mentionHits.length > 0 && mentionQuery != null) {
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setMentionIndex((index) => (index + 1) % mentionHits.length);
-        return;
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setMentionIndex((index) => (index - 1 + mentionHits.length) % mentionHits.length);
-        return;
-      }
-      if (event.key === "Tab" || plainEnter) {
-        event.preventDefault();
-        const hit = mentionHits[mentionIndex] ?? mentionHits[0];
-        if (hit) await pickMention(hit);
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setMentionHits([]);
-        return;
-      }
-    }
-    if (slashHits.length > 0 && slashQuery != null) {
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setSlashIndex((index) => (index + 1) % slashHits.length);
-        return;
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setSlashIndex((index) => (index - 1 + slashHits.length) % slashHits.length);
-        return;
-      }
-      if (event.key === "Tab") {
-        event.preventDefault();
-        completeSlash(slashHits[slashIndex]?.name ?? slashHits[0].name);
-        return;
-      }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setDraft("");
-        return;
-      }
-      if (plainEnter) {
-        event.preventDefault();
-        const hit = slashHits[slashIndex] ?? slashHits[0];
-        const typed = draft.slice(1);
-        if (typed === hit.name || typed.startsWith(`${hit.name} `)) {
-          await submit();
-          return;
-        }
-        completeSlash(hit.name);
-        return;
-      }
-    }
-    if (plainEnter) {
-      event.preventDefault();
-      await submit();
-    }
-  }
-
-  return (
-    <div
-      className={`composer ${className ?? ""} ${dropping ? "dropping" : ""}`}
-      onDragOver={onComposerDragOver}
-      onDragLeave={() => setDropping(false)}
-      onDrop={(event) => void onComposerDrop(event)}
-    >
-      {slashHits.length > 0 && (
-        <SlashMenu commands={slashHits} activeIndex={slashIndex} onPick={completeSlash} />
-      )}
-      {mentionHits.length > 0 && (
-        <MentionMenu hits={mentionHits} activeIndex={mentionIndex} onPick={(hit) => void pickMention(hit)} />
-      )}
-      <ComposerChips
-        attachments={attachments}
-        sessionRefs={sessionRefs}
-        onRemoveAttachment={(id) => setAttachments((prev) => prev.filter((item) => item.id !== id))}
-        onRemoveSession={(sessionId) => setSessionRefs((prev) => prev.filter((item) => item.sessionId !== sessionId))}
-      />
-      <textarea
-        value={draft}
-        placeholder={placeholder}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={(event) => void onComposerKey(event)}
-        onCompositionEnd={onCompositionEnd}
-        onPaste={(event) => void onComposerPaste(event)}
-        rows={rows}
-      />
-      <div className="composer-toolbar">
-        <button className="icon-btn attach-btn" type="button" title="添加文件或图片" onClick={() => void pickAttachments()}>
-          <AttachIcon />
-        </button>
-        {extraToolbar}
-        <ModelEffortPicker
-          models={models}
-          modelId={modelId}
-          effort={effort}
-          disabled={busy}
-          onChange={onModelEffort}
-        />
-        <ComposerSubmit
-          busy={busy && emptyComposer}
-          disabled={emptyComposer && !busy}
-          onClick={() => void (busy && emptyComposer ? onStop() : submit())}
-        />
-      </div>
-    </div>
-  );
-});
 
 function Stamp({ at, show = true }: { at?: number; show?: boolean }) {
   if (!show || !at) return null;
@@ -1641,9 +1152,6 @@ function SessionRow({
           <button className={`pin ${session.pinned ? "on" : ""}`} type="button" title={session.pinned ? "取消置顶" : "置顶"} draggable={false} onClick={onPin}>
             <PinIcon filled={Boolean(session.pinned)} />
           </button>
-          <button className="kebab" type="button" title="会话操作" draggable={false} onClick={onMenu}>
-            ⋯
-          </button>
         </div>
       )}
     </div>
@@ -1738,6 +1246,9 @@ export function App() {
   const [accountOpen, setAccountOpen] = useState(false);
   const accountDockRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [appearance, setAppearance] = useAppearance();
+  const [desktopOpen, setDesktopOpen] = useState(false);
   const [changelogOpen, setChangelogOpen] = useState(false);
   const [menu, setMenu] = useState<AppMenu | undefined>();
   const [hover, setHover] = useState<{ group: SessionGroup; x: number; y: number } | undefined>();
@@ -1779,15 +1290,6 @@ export function App() {
   useEffect(() => {
     followOutput.current = true;
   }, [state.sessionId]);
-
-  useEffect(() => {
-    if (!lightbox) return;
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") setLightbox(undefined);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [lightbox]);
 
   useEffect(() => {
     const el = scroller.current;
@@ -1889,6 +1391,17 @@ export function App() {
         item.kind === "tool" && item.id === selectedToolId,
     );
   }, [state.timeline, selectedToolId]);
+
+  useEffect(() => {
+    const onShortcut = (event: globalThis.KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.isComposing) return;
+      if (document.querySelector('[role="dialog"]')) return;
+      if (event.key.toLowerCase() === "k") { event.preventDefault(); setSearchOpen(true); }
+      if (event.key.toLowerCase() === "n") { event.preventDefault(); void beginNew(); }
+    };
+    window.addEventListener("keydown", onShortcut);
+    return () => window.removeEventListener("keydown", onShortcut);
+  }, []);
 
   async function startIn(folder: string) {
     await beginNew(folder);
@@ -2452,10 +1965,63 @@ export function App() {
     })),
   ];
 
+  const firstProjectKey = liveGroups.find((group) => group.key !== "__pinned__")?.key;
+  const listToolbar = (
+    <div className="workspace-actions">
+            <span className="nav-section-label">项目</span>
+            {(liveGroups.length > 0 || archivedSessions.length > 0) && (
+              <div className="group-bulk">
+                <button
+                  className="icon-btn"
+                  type="button"
+                  title="展开所有项目"
+                  onClick={() => void window.grok.setCollapsedGroups([]).then(setState)}
+                >
+                  <ChevronsDown size={16} />
+                </button>
+                <button
+                  className="icon-btn"
+                  type="button"
+                  title="收起所有项目"
+                  onClick={() => {
+                    const keys = [
+                      ...liveGroups.flatMap((group) => [group.key, ...(group.nested?.map((child) => child.key) ?? [])]),
+                      ...(hiddenWorkspaceGroups.length ? ["__hidden__"] : []),
+                      ...(archivedSessions.length ? ["__archived__"] : []),
+                    ];
+                    void window.grok.setCollapsedGroups(keys).then(setState);
+                  }}
+                >
+                  <ChevronsUp size={16} />
+                </button>
+                <button
+                  className={`icon-btn ${menu?.kind === "sort" ? "on" : ""}`}
+                  type="button"
+                  title="排序方式"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    clearTimeout(hoverTimer.current);
+                    setHover(undefined);
+                    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+                    setMenu((current) =>
+                      current?.kind === "sort"
+                        ? undefined
+                        : { kind: "sort", x: rect.right, y: rect.bottom },
+                    );
+                  }}
+                >
+                  <ListFilter size={16} />
+                </button>
+              </div>
+            )}
+          </div>
+  );
+
   const appClass = [
     "app",
     state.sidebarCollapsed ? "sidebar-collapsed" : "",
-    state.inspectorOpen ? "inspector-open" : "",
+    state.inspectorOpen && !studioTab ? "inspector-open" : "",
     state.settings.compactMode ? "compact" : "",
   ]
     .filter(Boolean)
@@ -2467,10 +2033,11 @@ export function App() {
       {state.sidebarCollapsed ? (
         <aside className="rail pane">
           <button className="icon-btn" type="button" title="展开侧栏" onClick={() => void window.grok.setSidebarCollapsed(false)}>
-            ›
+            <PanelLeft size={18} />
           </button>
+          <button className="icon-btn" type="button" title="搜索对话" aria-label="搜索对话" onClick={() => setSearchOpen(true)}><Search size={18} /></button>
           <button className="icon-btn" type="button" title="添加对话" onClick={() => void beginNew()}>
-            +
+            <Plus size={18} />
           </button>
           <button
             className={`icon-btn ${studioTab === "image" ? "on" : ""}`}
@@ -2478,7 +2045,7 @@ export function App() {
             title="图片生成"
             onClick={() => setStudioTab("image")}
           >
-            图
+            <ImageIcon size={18} />
           </button>
           <button
             className={`icon-btn ${studioTab === "video" ? "on" : ""}`}
@@ -2486,7 +2053,7 @@ export function App() {
             title="视频生成"
             onClick={() => setStudioTab("video")}
           >
-            视
+            <Video size={18} />
           </button>
           <button
             className={`icon-btn ${studioTab === "voice" ? "on" : ""}`}
@@ -2494,7 +2061,7 @@ export function App() {
             title="语音转写"
             onClick={() => setStudioTab("voice")}
           >
-            声
+            <Mic size={18} />
           </button>
           <div className="rail-foot">
             <button
@@ -2503,7 +2070,7 @@ export function App() {
               title="设置"
               onClick={() => setSettingsOpen(true)}
             >
-              ⚙
+              <SettingsIcon size={18} />
             </button>
             {state.update?.updateAvailable ? (
               <button
@@ -2523,88 +2090,14 @@ export function App() {
       ) : (
         <aside className="sidebar pane">
           <div className="sidebar-head">
-            <span className="brand-mark">Grok-Harness</span>
+            <span className="brand-mark">Grok Harness</span>
             <button className="icon-btn" type="button" title="收起侧栏" onClick={() => void window.grok.setSidebarCollapsed(true)}>
-              ‹
+              <PanelLeft size={16} />
             </button>
           </div>
-          <div className="workspace-actions">
-            <button className="linkish" type="button" onClick={() => void pickAndStart()}>
-              + 添加工作区
-            </button>
-            <button className="linkish" type="button" onClick={() => void beginNew()}>
-              + 添加对话
-            </button>
-            {(liveGroups.length > 0 || archivedSessions.length > 0) && (
-              <div className="group-bulk">
-                <button
-                  className="icon-btn"
-                  type="button"
-                  title="Expand all"
-                  onClick={() => void window.grok.setCollapsedGroups([]).then(setState)}
-                >
-                  <ExpandAllIcon />
-                </button>
-                <button
-                  className="icon-btn"
-                  type="button"
-                  title="Collapse all"
-                  onClick={() => {
-                    const keys = [
-                      ...liveGroups.flatMap((group) => [group.key, ...(group.nested?.map((child) => child.key) ?? [])]),
-                      ...(hiddenWorkspaceGroups.length ? ["__hidden__"] : []),
-                      ...(archivedSessions.length ? ["__archived__"] : []),
-                    ];
-                    void window.grok.setCollapsedGroups(keys).then(setState);
-                  }}
-                >
-                  <CollapseAllIcon />
-                </button>
-                <button
-                  className={`icon-btn ${menu?.kind === "sort" ? "on" : ""}`}
-                  type="button"
-                  title="排序方式"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    clearTimeout(hoverTimer.current);
-                    setHover(undefined);
-                    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-                    setMenu((current) =>
-                      current?.kind === "sort"
-                        ? undefined
-                        : { kind: "sort", x: rect.right, y: rect.bottom },
-                    );
-                  }}
-                >
-                  <SortIcon />
-                </button>
-              </div>
-            )}
-          </div>
-          <nav className="sidebar-modules" aria-label="媒体模块">
-            <button
-              className={`sidebar-mod ${studioTab === "image" ? "on" : ""}`}
-              type="button"
-              onClick={() => setStudioTab("image")}
-            >
-              图片生成
-            </button>
-            <button
-              className={`sidebar-mod ${studioTab === "video" ? "on" : ""}`}
-              type="button"
-              onClick={() => setStudioTab("video")}
-            >
-              视频生成
-            </button>
-            <button
-              className={`sidebar-mod ${studioTab === "voice" ? "on" : ""}`}
-              type="button"
-              onClick={() => setStudioTab("voice")}
-            >
-              语音转写
-            </button>
-          </nav>
+          <SidebarNavigation studioTab={studioTab} onNew={() => void beginNew()} onSearch={() => setSearchOpen(true)} onWorkspace={() => void pickAndStart()} onStudio={setStudioTab} />
+
+
           <div className="session-list">
             {liveSessions.length === 0 && archivedSessions.length === 0 && (
               <div className="session-empty">本机还没有会话</div>
@@ -2613,7 +2106,9 @@ export function App() {
               const isCollapsed = state.collapsedGroups.includes(group.key);
               const nested = group.nested ?? [];
               return (
-                <section className={`session-group ${group.key === "__pinned__" ? "pinned" : ""}`} key={group.key}>
+                <Fragment key={group.key}>
+                {group.key === firstProjectKey ? listToolbar : null}
+                <section className={`session-group ${group.key === "__pinned__" ? "pinned" : "project"}`}>
                   <header
                     className={`session-group-head ${menu?.kind === "group" && menu.id === group.key ? "menu-open" : ""} ${sidebarDrag?.kind === "group" && sidebarDrag.key === group.key ? "dragging" : ""} ${sidebarDrag?.kind === "group" && sidebarDrag.overId === group.key ? `drop-${sidebarDrag.edge}` : ""}`}
                     draggable={Boolean(group.cwd)}
@@ -2640,6 +2135,7 @@ export function App() {
                   >
                     <div
                       className="session-group-toggle"
+                      aria-expanded={!isCollapsed}
                       role="button"
                       tabIndex={0}
                       onClick={() => {
@@ -2656,7 +2152,7 @@ export function App() {
                         }
                       }}
                     >
-                      <FoldChevron open={!isCollapsed} />
+                      {group.cwd ? (isCollapsed ? <FolderClosed className="project-folder" size={16} /> : <FolderOpen className="project-folder" size={16} />) : <FoldChevron open={!isCollapsed} />}
                       <span className="session-group-copy">
                         <strong>{group.label}</strong>
                       </span>
@@ -2694,9 +2190,10 @@ export function App() {
                                 <button
                                   className="session-group-toggle"
                                   type="button"
+                                  aria-expanded={!childCollapsed}
                                   onClick={() => void window.grok.toggleGroup(child.key).then(setState)}
                                 >
-                                  <FoldChevron open={!childCollapsed} />
+                                  {childCollapsed ? <FolderClosed className="project-folder" size={16} /> : <FolderOpen className="project-folder" size={16} />}
                                   <span className="session-group-copy">
                                     <strong>{child.label}</strong>
                                   </span>
@@ -2756,8 +2253,10 @@ export function App() {
                         ))}
                   </Fold>
                 </section>
+                </Fragment>
               );
             })}
+            {!firstProjectKey ? listToolbar : null}
             {hiddenWorkspaceGroups.length > 0 && (
               <section className="session-group hidden-workspaces">
                 <header className="session-group-head">
@@ -2915,7 +2414,7 @@ export function App() {
                 className="user-pop"
                 onPointerDown={(event) => event.stopPropagation()}
               >
-                <h3>{account.email ?? "未登录"}</h3>
+                <h3>{account.email ?? "Grok 账户"}</h3>
                 <dl>
                   <dt>状态</dt>
                   <dd>{statusLabel(state.connection)}</dd>
@@ -2943,7 +2442,7 @@ export function App() {
                       </small>
                     </>
                   ) : (
-                    <small>正在从 /usage 同步额度，每 5 分钟更新一次。</small>
+                    <small>暂无额度数据，可刷新账户状态。</small>
                   )}
                 </div>
                 <button
@@ -2977,10 +2476,16 @@ export function App() {
                 >
                   打开设置
                 </button>
+                <button className="linkish" type="button" onClick={() => {
+                  setAccountOpen(false);
+                  setDesktopOpen(true);
+                }}>桌面应用与更新</button>
               </div>
             )}
             <div className="user-dock-bar">
               <button
+                aria-expanded={accountOpen}
+                aria-label="账户菜单"
                 className="user-chip"
                 type="button"
                 onClick={(event) => {
@@ -3009,7 +2514,7 @@ export function App() {
                   setSettingsOpen(true);
                 }}
               >
-                ⚙
+                <SettingsIcon size={18} />
               </button>
               {state.update?.updateAvailable ? (
                 <button
@@ -3073,7 +2578,7 @@ export function App() {
                 title="会话操作"
                 onClick={(event) => placeMenu(event, { kind: "session", id: currentSession.sessionId })}
               >
-                ⋯
+                <MoreHorizontal size={18} />
               </button>
             )}
             {!studioTab ? (
@@ -3083,7 +2588,7 @@ export function App() {
                 title={state.inspectorOpen ? "收起右侧" : "打开检查器"}
                 onClick={() => void window.grok.setInspectorOpen(!state.inspectorOpen)}
               >
-                {state.inspectorOpen ? "›|" : "|‹"}
+                <PanelRight size={18} />
               </button>
             ) : null}
           </div>
@@ -3108,8 +2613,8 @@ export function App() {
           />
         ) : home ? (
           <div className="home">
-            <h1>新对话</h1>
-            <p>指定工作区、模型和思考长度，然后直接开聊。</p>
+            <h1>今天想做什么？</h1>
+            <p>从一个想法开始，让 Grok 帮你完成。</p>
             <ComposerPane
               className="home-composer"
               busy={state.busy}
@@ -3117,7 +2622,7 @@ export function App() {
               models={state.models}
               modelId={state.modelId}
               effort={state.effort}
-              placeholder="今天要做什么？可拖入或粘贴图片、文件，打 @ 引用文件或对话。"
+              placeholder="描述任务，或用 @ 添加上下文"
               rows={4}
               extraToolbar={
                 <div className={`chip workspace-chip ${draftWorkspace ? "has-value" : ""}`}>
@@ -3127,7 +2632,7 @@ export function App() {
                     title={draftWorkspace || "选择工作区"}
                     onClick={() => void pickWorkspace()}
                   >
-                    {draftWorkspace ? folderLabel(draftWorkspace) : "工作区"}
+                    <FolderOpen size={14} />{draftWorkspace ? folderLabel(draftWorkspace) : "选择项目"}
                   </button>
                   {draftWorkspace ? (
                     <button className="chip-clear" type="button" title="移除工作区" onClick={(event) => void clearWorkspace(event)}>
@@ -3230,7 +2735,7 @@ export function App() {
                 models={state.models}
                 modelId={state.modelId}
                 effort={state.effort}
-                placeholder="给 grok 下指令。打 / 可列出命令，打 @ 引用文件或对话。可拖入或粘贴图片、文件。Enter 发送，Ctrl+Enter 换行。"
+                placeholder="继续对话，或用 @ 添加上下文"
                 rows={3}
                 injectText={injectText}
                 onSend={sendComposer}
@@ -3276,9 +2781,17 @@ export function App() {
         />
       )}
 
+      {searchOpen && <SearchDialog sessions={state.sessions} onOpen={(session) => void openSession(session)} onClose={() => setSearchOpen(false)} />}
+      <DesktopPanel open={desktopOpen} onOpen={() => setDesktopOpen(true)} onClose={() => setDesktopOpen(false)} />
       {settingsOpen && (
         <SettingsPanel
           settings={state.settings}
+          appearance={appearance}
+          onAppearance={setAppearance}
+          account={state.account}
+          onDesktop={() => { setSettingsOpen(false); setDesktopOpen(true); }}
+          onUsage={() => { setSettingsOpen(false); setUsageOpen(true); }}
+          onUpdate={() => { setSettingsOpen(false); setChangelogOpen(true); void window.grok.checkUpdate().then(setState); }}
           models={state.models}
           onClose={() => setSettingsOpen(false)}
           onChange={(key, value) => void window.grok.setGrokSetting(key, value).then(setState)}
@@ -3298,17 +2811,12 @@ export function App() {
       )}
       {usageOpen && <UsagePanel usage={state.tokenUsage} onClose={() => setUsageOpen(false)} />}
       {lightbox && (
-        <div
-          className="lightbox"
-          role="dialog"
-          onClick={() => setLightbox(undefined)}
-          onContextMenu={(event) => {
+        <Dialog title={lightbox.name || "图片预览"} className="chat-image-panel" onClose={() => setLightbox(undefined)}>
+          <img src={lightbox.src} alt={lightbox.name || "对话图片"} onContextMenu={(event) => {
             event.preventDefault();
             if (!/^https?:/i.test(lightbox.path)) void window.grok.imageMenu(lightbox.path);
-          }}
-        >
-          <img src={lightbox.src} alt={lightbox.name || ""} onClick={(event) => event.stopPropagation()} />
-        </div>
+          }} />
+        </Dialog>
       )}
     </div>
   );

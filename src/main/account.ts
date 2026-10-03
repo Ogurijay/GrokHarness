@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AccountInfo, QuotaInfo } from "../shared/types";
+import { containsGrokCredentials } from "./credential-presence";
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -62,6 +63,15 @@ async function readAuthFile(): Promise<unknown> {
   const home = process.env.GROK_HOME?.trim() || join(homedir(), ".grok");
   const raw = await readFile(join(home, "auth.json"), "utf8");
   return JSON.parse(raw);
+}
+
+export async function hasGrokCredentials(): Promise<boolean> {
+  if (process.env.XAI_API_KEY?.trim()) return true;
+  try {
+    return containsGrokCredentials(await readAuthFile());
+  } catch {
+    return false;
+  }
 }
 
 function safeJson(text: string): unknown {

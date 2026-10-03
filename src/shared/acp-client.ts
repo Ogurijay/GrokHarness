@@ -47,11 +47,13 @@ export class AcpClient {
   private pending = new Map<
     number | string,
     {
+      method: string;
+      sessionId?: string;
+      promptId?: string;
       resolve: (value: JsonValue | typeof ABSORBED_BY_STREAM) => void;
       reject: (err: Error) => void;
     }
   >();
-  private streamingSessions = new Set<string>();
   private handlers: AcpClientHandlers;
 
   constructor(handlers: AcpClientHandlers = {}) {
@@ -73,10 +75,12 @@ export class AcpClient {
         resolve();
       });
       ws.on("message", (data) => {
+        if (this.ws !== ws) return;
         const text = typeof data === "string" ? data : data.toString("utf8");
         this.handleMessage(text);
       });
       ws.on("error", (err) => {
+        if (this.ws !== ws) return;
         const error = err instanceof Error ? err : new Error(String(err));
         this.handlers.onError?.(error);
         if (!settled) {
@@ -85,12 +89,12 @@ export class AcpClient {
         }
       });
       ws.on("close", (code, reasonBuf) => {
+        if (this.ws !== ws) return;
         const reason = reasonBuf?.toString("utf8") ?? "";
         for (const [, p] of this.pending) {
           p.reject(new Error(`WebSocket closed (${code}): ${reason}`));
         }
         this.pending.clear();
-        this.streamingSessions.clear();
         this.handlers.onClose?.(code, reason);
       });
     });
@@ -98,6 +102,8 @@ export class AcpClient {
 
   close(): void {
     if (!this.ws) return;
+    for (const pending of this.pending.values()) pending.reject(new Error("ACP client closed"));
+    this.pending.clear();
     try {
       this.ws.close();
     } catch {
@@ -119,13 +125,11 @@ export class AcpClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        if (sessionId && this.streamingSessions.has(sessionId)) {
-          resolve(ABSORBED_BY_STREAM);
-          return;
-        }
         reject(new Error(`ACP request timed out: ${method}`));
       }, timeoutMs);
       this.pending.set(id, {
+        method,
+        sessionId,
         resolve: (value) => {
           clearTimeout(timer);
           resolve(value);
@@ -191,11 +195,32 @@ export class AcpClient {
     }
 
     if (msg.method) {
-      if (msg.method === "session/update") {
-        const sid = extractSessionId(msg.params);
-        if (sid) this.streamingSessions.add(sid);
-      }
+      this.trackPromptCompletion(msg);
       this.handlers.onNotification?.(msg.method, msg.params);
+    }
+  }
+
+  private trackPromptCompletion(msg: JsonRpcMessage): void {
+    const params = msg.params && typeof msg.params === "object" && !Array.isArray(msg.params) ? msg.params : undefined;
+    if (!params) return;
+    const meta = params._meta && typeof params._meta === "object" && !Array.isArray(params._meta) ? params._meta : undefined;
+    const update = params.update && typeof params.update === "object" && !Array.isArray(params.update) ? params.update : undefined;
+    const sessionId = extractSessionId(msg.params);
+    const promptId = meta?.promptId ?? params.promptId ?? update?.prompt_id;
+    const terminal = /^(?:_x\.ai|x\.ai)\/session\/prompt_complete$/.test(msg.method ?? "") ||
+      (/^(?:session|_x\.ai\/session|x\.ai\/session)\/update$/.test(msg.method ?? "") && update?.sessionUpdate === "turn_completed");
+    for (const [id, pending] of this.pending) {
+      if (pending.method !== "session/prompt" || pending.sessionId !== sessionId) continue;
+      if (!terminal && typeof promptId === "string" && !pending.promptId) pending.promptId = promptId;
+      if (!terminal || typeof promptId !== "string" || pending.promptId !== promptId) continue;
+      this.pending.delete(id);
+      const reason = params.stopReason ?? update?.stop_reason;
+      if (reason === "error") {
+        const message = params.agentResult ?? update?.agent_result;
+        pending.reject(new Error(typeof message === "string" ? message : "Grok prompt failed"));
+      } else {
+        pending.resolve({ stopReason: typeof reason === "string" ? reason : "end_turn" });
+      }
     }
   }
 }

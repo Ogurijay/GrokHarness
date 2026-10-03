@@ -47,7 +47,8 @@ export function ComposerSubmit({
     <button
       className={`send-btn ${busy ? "stop" : ""}`}
       type="button"
-      title={busy ? "Stop" : "Send"}
+      title={busy ? "停止" : "发送"}
+      aria-label={busy ? "停止" : "发送"}
       disabled={disabled}
       onClick={onClick}
     >

@@ -6,6 +6,26 @@ Every GitHub iteration must add a section here in both Chinese and English. See 
 
 ---
 
+## 0.6.0 — 2026-10-01
+
+### 中文
+
+- 新增 Windows 当前用户安装包、桌面与开始菜单快捷方式，无需终端启动。
+- 新增 Grok CLI / 登录凭据检查、官方浏览器登录和自定义 CLI 路径保存。
+- 新增独立桌面应用更新检查、下载与重启安装；源码发行版不会被误判为可下载更新。
+- 单实例启动唤回已有窗口，托盘退出先停止本应用的 Grok 后台。
+- ACP 客户端版本从应用版本读取，避免安装包与握手版本不一致。
+
+### English
+
+- Added a per-user Windows installer with desktop and Start menu shortcuts.
+- Added CLI and credential checks, official browser login, and persisted CLI selection.
+- Added separate desktop app update checks, downloads, and restart-to-install; source-only releases are not installable updates.
+- Added single-instance window restoration and orderly cleanup of the app-owned agent on tray Quit.
+- ACP client version now follows the application version.
+
+---
+
 ## 0.5.0 — 2026-09-17
 
 ### 中文

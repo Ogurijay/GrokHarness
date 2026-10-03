@@ -1,0 +1,33 @@
+appId: ai.x.grok-harness
+productName: Grok-Harness
+directories:
+  output: release
+  buildResources: resources
+files:
+  - out/**/*
+  - resources/icon.png
+  - resources/icon.ico
+  - package.json
+asarUnpack:
+  - node_modules/sql.js/dist/*.wasm
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: resources/icon.png
+  verifyUpdateCodeSignature: false
+nsis:
+  oneClick: true
+  perMachine: false
+  allowElevation: false
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Grok-Harness
+  uninstallDisplayName: Grok-Harness
+  runAfterFinish: false
+  artifactName: ${productName}-Setup-${version}.${ext}
+publish:
+  provider: github
+  owner: Ogurijay
+  repo: GrokHarness
+  releaseType: release

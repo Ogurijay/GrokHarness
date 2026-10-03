@@ -13,20 +13,34 @@ function randomSecret(): string {
   return randomBytes(24).toString("hex");
 }
 
-function waitPort(host: string, port: number, timeoutMs: number): Promise<void> {
+function waitPort(host: string, port: number, timeoutMs: number, signal?: AbortSignal): Promise<void> {
   const start = Date.now();
   return new Promise((resolve, reject) => {
+    let finished = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let socket: ReturnType<typeof createConnection> | undefined;
+    const finish = (error?: Error) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(retry);
+      socket?.destroy();
+      signal?.removeEventListener("abort", cancel);
+      if (error) reject(error);
+      else resolve();
+    };
+    const cancel = () => finish(new Error("Grok connection cancelled"));
+    signal?.addEventListener("abort", cancel, { once: true });
     const tryOnce = () => {
-      const socket = createConnection({ host, port }, () => {
-        socket.end();
-        resolve();
-      });
+      if (finished) return;
+      if (signal?.aborted) { cancel(); return; }
+      socket = createConnection({ host, port }, () => finish());
       socket.on("error", () => {
-        socket.destroy();
+        socket?.destroy();
+        if (finished) return;
         if (Date.now() - start > timeoutMs) {
-          reject(new Error(`等待 grok agent 监听 ${host}:${port} 超时`));
+          finish(new Error(`等待 grok agent 监听 ${host}:${port} 超时`));
         } else {
-          setTimeout(tryOnce, 120);
+          retry = setTimeout(tryOnce, 120);
         }
       });
     };
@@ -54,8 +68,9 @@ function pickFreePort(): Promise<number> {
   });
 }
 
-export async function startGrokServe(binary: string): Promise<ServeHandle> {
+export async function startGrokServe(binary: string, signal?: AbortSignal): Promise<ServeHandle> {
   const port = await pickFreePort();
+  if (signal?.aborted) throw new Error("Grok connection cancelled");
   const secret = randomSecret();
   const bind = `127.0.0.1:${port}`;
   const child = spawn(
@@ -91,11 +106,19 @@ export async function startGrokServe(binary: string): Promise<ServeHandle> {
     child.once("error", reject);
   });
 
+  let cancelStart: (() => void) | undefined;
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    cancelStart = () => reject(new Error("Grok connection cancelled"));
+    signal?.addEventListener("abort", cancelStart, { once: true });
+  });
   try {
-    await Promise.race([waitPort("127.0.0.1", port, 25_000), exitPromise]);
+    await Promise.race([waitPort("127.0.0.1", port, 25_000, signal), exitPromise, cancelled]);
+    if (signal?.aborted) throw new Error("Grok connection cancelled");
   } catch (err) {
     await stopGrokServe(child);
     throw err;
+  } finally {
+    if (cancelStart) signal?.removeEventListener("abort", cancelStart);
   }
 
   child.removeAllListeners("exit");

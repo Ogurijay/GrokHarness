@@ -1,3 +1,4 @@
+import { Dialog } from "./ui/Dialog";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { GrokUpdateInfo } from "../shared/types";
@@ -16,14 +17,7 @@ export function UpdatePanel({
   const atRisk = update?.atRisk ?? [];
   const busyRisk = atRisk.some((row) => row.busy);
   return (
-    <div className="settings-scrim" onClick={onClose}>
-      <div className="settings-panel changelog-panel" onClick={(event) => event.stopPropagation()}>
-        <header className="settings-head">
-          <h2>更新日志</h2>
-          <button className="icon-btn" type="button" onClick={onClose}>
-            ×
-          </button>
-        </header>
+    <Dialog title="Grok Build 更新" className="changelog-panel" onClose={onClose}>
         <p className="settings-lead">
           {available
             ? `Grok Build ${update?.currentVersion} → ${update?.latestVersion}`
@@ -94,7 +88,6 @@ export function UpdatePanel({
             </button>
           </div>
         ) : null}
-      </div>
-    </div>
+    </Dialog>
   );
 }

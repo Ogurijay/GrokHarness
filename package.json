@@ -1,19 +1,26 @@
 {
   "name": "grok-harness",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
-  "description": "Grok-Harness v0.1 — local Mac/Windows shell for Grok Build over ACP",
+  "description": "Grok-Harness desktop application for Grok Build",
   "type": "module",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "build:win": "npm run typecheck && npm run build && electron-builder --win --x64 --publish never",
+    "pack:win": "npm run typecheck && npm run build && electron-builder --win --x64 --dir --publish never",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "probe": "node scripts/acp-probe.mjs"
+    "probe": "node scripts/acp-probe.mjs",
+    "test:desktop": "node --test scripts/desktop-rules.test.mjs",
+    "test:stream": "node --test scripts/agent-stream.test.mjs scripts/acp-stream.test.mjs",
+    "test:desktop:smoke": "node scripts/desktop-smoke.mjs"
   },
   "dependencies": {
+    "electron-updater": "6.8.9",
     "highlight.js": "^11.12.0",
+    "lucide-react": "1.49.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
@@ -31,6 +38,7 @@
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.4.1",
     "electron": "^35.2.1",
+    "electron-builder": "26.15.3",
     "electron-vite": "^3.1.0",
     "typescript": "^5.8.3",
     "vite": "^6.3.5"

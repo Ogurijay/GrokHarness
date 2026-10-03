@@ -1,0 +1,23 @@
+.desktop-scrim { z-index: 1000; padding: 24px; }
+.desktop-panel { width: 540px; max-width: 100%; max-height: calc(100vh - 48px); overflow: auto; background: #fff; border: 1px solid #d8dade; border-radius: 8px; box-shadow: 0 16px 60px #0002; padding: 24px; letter-spacing: 0; outline: none; }
+.desktop-head, .desktop-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.desktop-head h2 { font-size: 22px; margin: 0 0 6px; }
+.desktop-head span, .desktop-status { color: #676b72; font-size: 12px; }
+.desktop-section { border-top: 1px solid #e5e6e9; margin-top: 22px; padding-top: 20px; }
+.desktop-section h3 { font-size: 14px; margin: 0; }
+.desktop-status.ready { color: #28764d; }
+.desktop-path { font-size: 12px; color: #676b72; overflow-wrap: anywhere; margin-top: 10px; }
+.desktop-auth { font-size: 13px; margin-top: 16px; }
+.desktop-auth span:last-child { display: inline-flex; gap: 6px; align-items: center; color: #4b5058; }
+.desktop-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.desktop-actions button, .desktop-icon { display: inline-flex; justify-content: center; align-items: center; gap: 7px; min-height: 34px; border: 1px solid #d8dade; border-radius: 6px; background: #fff; color: #34383e; font: inherit; font-size: 12px; padding: 7px 11px; cursor: pointer; letter-spacing: 0; }
+.desktop-actions button:hover, .desktop-icon:hover { background: #f3f4f6; }
+.desktop-actions .primary { color: #fff; background: #1468cf; border-color: #1468cf; }
+.desktop-actions .primary:hover { background: #105ab5; }
+.desktop-actions button:disabled { opacity: .5; cursor: default; }
+.desktop-actions .desktop-icon, .desktop-icon { width: 34px; height: 34px; flex: 0 0 34px; padding: 0; }
+.desktop-panel button:focus-visible { outline: 2px solid #1468cf; outline-offset: 3px; }
+.desktop-update { font-size: 13px; color: #555b64; margin: 14px 0 0; line-height: 1.6; overflow-wrap: anywhere; }
+.desktop-error { color: #b02a32; font-size: 13px; line-height: 1.6; }
+.desktop-panel progress { width: 100%; height: 6px; margin-top: 12px; accent-color: #1468cf; }
+@media (max-width: 600px) { .desktop-scrim { padding: 12px; } .desktop-panel { padding: 18px; max-height: calc(100vh - 24px); } .desktop-row { flex-wrap: wrap; gap: 8px; } }

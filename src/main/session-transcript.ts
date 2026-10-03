@@ -154,7 +154,11 @@ function applyUpdate(
 }
 
 /** Rebuild a conversation timeline from grok's on-disk ACP update stream. */
-export async function loadSessionTranscript(sessionId: string, cwd?: string): Promise<TimelineItem[]> {
+export async function loadSessionTranscript(
+  sessionId: string,
+  cwd?: string,
+  eventIds?: Set<string>,
+): Promise<TimelineItem[]> {
   const dir = await resolveSessionDir(sessionId, cwd);
   if (!dir) return [];
   const items: TimelineItem[] = [];
@@ -175,6 +179,8 @@ export async function loadSessionTranscript(sessionId: string, cwd?: string): Pr
       const rec = asRecord(row);
       if (!rec) continue;
       const params = asRecord(rec.params) ?? rec;
+      const eventId = asString(asRecord(params._meta)?.eventId);
+      if (eventId) eventIds?.add(eventId);
       const update = asRecord(params.update) ?? params;
       if (!asString(update.sessionUpdate)) continue;
       const stats = readEventStats(update, asRecord(params._meta) ?? asRecord(rec._meta), unixMs(rec.timestamp));

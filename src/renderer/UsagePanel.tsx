@@ -1,3 +1,4 @@
+import { Dialog } from "./ui/Dialog";
 import { useMemo } from "react";
 import type { TokenUsageSummary } from "../shared/types";
 import { formatTokens } from "../shared/step-stats";
@@ -86,14 +87,7 @@ export function UsagePanel({
   }, [grid.weeks]);
 
   return (
-    <div className="settings-scrim" onClick={onClose}>
-      <div className="settings-panel usage-panel" onClick={(event) => event.stopPropagation()}>
-        <header className="settings-head">
-          <h2>Token 消耗</h2>
-          <button className="icon-btn" type="button" onClick={onClose}>
-            ×
-          </button>
-        </header>
+    <Dialog title="用量" className="usage-panel" onClose={onClose}>
         <p className="settings-lead">按天统计本机 Grok-Harness 对话里记录到的 token。颜色越深，当天用量越高。</p>
         <div className="usage-kpis">
           <div>
@@ -153,7 +147,6 @@ export function UsagePanel({
             <span>多</span>
           </div>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }

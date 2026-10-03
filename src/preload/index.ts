@@ -13,8 +13,26 @@ import type {
   StartOptions,
 } from "../shared/types";
 import type { GrokSettings } from "../shared/grok-settings";
+import type { DesktopState } from "../shared/desktop";
 
 export type GrokApi = {
+  windowControls: {
+    platform: string;
+    setTheme: (theme: "system" | "light" | "dark") => Promise<void>;
+  };
+  desktop: {
+    getState: () => Promise<DesktopState>;
+    refresh: () => Promise<DesktopState>;
+    chooseBinary: () => Promise<DesktopState>;
+    login: () => Promise<DesktopState>;
+    cancelLogin: () => Promise<DesktopState>;
+    checkUpdate: () => Promise<DesktopState>;
+    downloadUpdate: () => Promise<DesktopState>;
+    installUpdate: () => Promise<void>;
+    openLink: (link: "releases" | "install") => Promise<boolean>;
+    onState: (cb: (state: DesktopState) => void) => () => void;
+    onOpen: (cb: () => void) => () => void;
+  };
   getState: () => Promise<AppSnapshot>;
   pickFolder: () => Promise<string | null>;
   start: (workspace: string, options?: boolean | StartOptions) => Promise<AppSnapshot>;
@@ -74,6 +92,30 @@ export type GrokApi = {
 };
 
 const api: GrokApi = {
+  windowControls: {
+    platform: process.platform,
+    setTheme: (theme) => ipcRenderer.invoke("window:setTheme", theme),
+  },
+  desktop: {
+    getState: () => ipcRenderer.invoke("desktop:getState"),
+    refresh: () => ipcRenderer.invoke("desktop:refresh"),
+    chooseBinary: () => ipcRenderer.invoke("desktop:chooseBinary"),
+    login: () => ipcRenderer.invoke("desktop:login"),
+    cancelLogin: () => ipcRenderer.invoke("desktop:cancelLogin"),
+    checkUpdate: () => ipcRenderer.invoke("desktop:checkUpdate"),
+    downloadUpdate: () => ipcRenderer.invoke("desktop:downloadUpdate"),
+    installUpdate: () => ipcRenderer.invoke("desktop:installUpdate"),
+    openLink: (link) => ipcRenderer.invoke("desktop:openLink", link),
+    onState: (cb) => {
+      const listener = (_event: unknown, state: DesktopState) => cb(state);
+      ipcRenderer.on("desktop:state", listener);
+      return () => ipcRenderer.removeListener("desktop:state", listener);
+    },
+    onOpen: (cb) => {
+      ipcRenderer.on("desktop:open", cb);
+      return () => ipcRenderer.removeListener("desktop:open", cb);
+    },
+  },
   getState: () => ipcRenderer.invoke("grok:getState"),
   pickFolder: () => ipcRenderer.invoke("grok:pickFolder"),
   start: (workspace, options) => ipcRenderer.invoke("grok:start", workspace, options),

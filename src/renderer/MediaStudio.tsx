@@ -1,3 +1,5 @@
+import { Dialog } from "./ui/Dialog";
+import { Image as ImageIcon, Mic, Play, Video } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ComposerSubmitPayload, MediaAsset, PromptAttachment } from "../shared/types";
 import { AttachIcon, ComposerSubmit } from "./composer-controls";
@@ -10,19 +12,19 @@ const ASPECTS = ["auto", "1:1", "16:9", "9:16", "4:3", "3:4"] as const;
 const COPY: Record<StudioTab, { title: string; hint: string; empty: string; placeholder: string }> = {
   image: {
     title: "图片生成",
-    hint: "走 /imagine 与 image_gen / image_edit，结果保存在本机会话目录。",
+    hint: "图片保存在本机。添加参考图可以修改已有画面。",
     empty: "还没有生成过图片。在底部写下画面，生成后会出现在这里。",
     placeholder: "描述画面，例如：金色日落下的平静海面，剪影棕榈树",
   },
   video: {
     title: "视频生成",
-    hint: "走 /imagine-video 与 image_to_video，没有参考图时会先生图再动画。",
+    hint: "添加参考图作为起始画面，或直接描述想要的镜头。",
     empty: "还没有生成过视频。在底部写下镜头，生成后会出现在这里。",
     placeholder: "描述镜头，例如：一只猫在爵士酒吧弹钢琴，镜头缓慢推近",
   },
   voice: {
     title: "语音转写",
-    hint: "听写走系统语音识别。也可以录音或上传音频，交给 Grok 转写后保存到资源库。",
+    hint: "支持听写、录音和上传音频。转写结果保存到本机资源库。",
     empty: "还没有保存过转写。听写、录音或上传音频后会出现在这里。",
     placeholder: "",
   },
@@ -419,6 +421,7 @@ export function MediaStudio({
         <input
           className="studio-search"
           value={query}
+          aria-label="搜索媒体资源"
           placeholder="搜索提示词或文件名"
           onChange={(event) => setQuery(event.target.value)}
         />
@@ -428,6 +431,7 @@ export function MediaStudio({
       <div className="studio-scroll">
         {filtered.length === 0 && !skeletons ? (
           <div className="studio-empty">
+            <span className="studio-empty-icon">{tab === "image" ? <ImageIcon size={28} /> : tab === "video" ? <Video size={28} /> : <Mic size={28} />}</span>
             <strong>{copy.title}</strong>
             <p>{copy.empty}</p>
           </div>
@@ -474,7 +478,7 @@ export function MediaStudio({
                       <span className="studio-tile-mask">
                         <em>{caption(asset) || formatWhen(asset.createdAt)}</em>
                       </span>
-                      {asset.kind === "video" ? <i className="studio-play">▶</i> : null}
+                      {asset.kind === "video" ? <i className="studio-play"><Play size={16} fill="currentColor" /></i> : null}
                     </button>
                   ))}
                 </div>
@@ -488,6 +492,7 @@ export function MediaStudio({
         {tab === "image" ? (
           <>
             <textarea
+              aria-label={`${copy.title}提示词`}
               className="studio-prompt"
               rows={2}
               value={imagePrompt}
@@ -540,6 +545,7 @@ export function MediaStudio({
         {tab === "video" ? (
           <>
             <textarea
+              aria-label={`${copy.title}提示词`}
               className="studio-prompt"
               rows={2}
               value={videoPrompt}
@@ -646,7 +652,7 @@ export function MediaStudio({
       </div>
 
       {viewer ? (
-        <div className="studio-lightbox" role="dialog" onClick={() => setViewer(undefined)}>
+        <Dialog title="资源预览" className="media-preview-panel" onClose={() => setViewer(undefined)}>
           <div className="studio-lightbox-body" onClick={(event) => event.stopPropagation()}>
             <div className="studio-lightbox-stage">
               {viewer.kind === "video" ? (
@@ -718,11 +724,8 @@ export function MediaStudio({
                 </button>
               </div>
             </aside>
-            <button className="icon-btn studio-lightbox-close" type="button" onClick={() => setViewer(undefined)}>
-              ×
-            </button>
           </div>
-        </div>
+        </Dialog>
       ) : null}
     </div>
   );

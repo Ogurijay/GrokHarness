@@ -4,7 +4,7 @@ Grok-Harness is a local Mac/Windows Electron shell for [Grok Build](https://gith
 
 Grok-Harness 是本机 Mac / Windows Electron 壳：通过 ACP 驱动 Grok Build，不重写 agent。
 
-Current version / 当前版本：**v0.5.0** (`package.json`)
+Current version / 当前版本：**v0.6.0** (`package.json`)
 
 ---
 
@@ -61,3 +61,17 @@ Do not push a product change without a changelog row. If multiple changes ship t
 - 不要把 agent 绑到 `0.0.0.0` 或公开暴露。
 - 不要提交密钥。
 - 用户设置写入 `~/.grok/config.toml`，密钥类字段不得进界面。
+
+## Desktop distribution / 桌面发布
+
+- Windows builds use `npm run build:win`; generated installers and QA files stay in ignored `release/`.
+- Preserve single-instance startup and orderly shutdown of only the app-owned agent. Window close hides to tray; tray Quit performs cleanup.
+- Browser login delegates to the official CLI. App preferences may save the CLI path, never tokens or secrets.
+- App updates use GitHub release installer assets and `latest.yml`, independently of Grok Build updates. Do not advertise source-only releases as installable updates.
+- Current builds are unsigned; do not claim code signing or verified end-to-end upgrade until tested. Release steps: `docs/WINDOWS_DESKTOP.md`.
+
+- Windows 安装包使用 `npm run build:win` 构建，产物及验收截图留在被忽略的 `release/`。
+- 保留单实例启动和有序退出，只回收本应用启动的 agent；窗口关闭到托盘，托盘退出执行清理。
+- 浏览器登录委托官方 CLI，应用配置只可保存程序路径，不保存密钥。
+- 应用更新独立于 Grok Build 更新，不将只有源码的 release 当安装更新。
+- 当前构建未签名；未经验证不得宣称签名或完整跨版本升级通过。发布步骤见 `docs/WINDOWS_DESKTOP.md`。

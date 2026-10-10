@@ -1,6 +1,6 @@
 {
   "name": "grok-harness",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "Grok-Harness desktop application for Grok Build",
   "type": "module",
@@ -15,6 +15,8 @@
     "probe": "node scripts/acp-probe.mjs",
     "test:desktop": "node --test scripts/desktop-rules.test.mjs",
     "test:stream": "node --test scripts/agent-stream.test.mjs scripts/acp-stream.test.mjs",
+    "test:subagents": "node --test scripts/subagents.test.mjs",
+    "test:sessions": "node --test scripts/session-management.test.mjs",
     "test:desktop:smoke": "node scripts/desktop-smoke.mjs"
   },
   "dependencies": {

@@ -6,6 +6,30 @@ Every GitHub iteration must add a section here in both Chinese and English. See 
 
 ---
 
+## 0.7.0 — 2026-10-10
+
+### 中文
+
+- 新增会话管理面板：按标题、目录和分组筛选，全选匹配结果，批量置顶、归档、移动或删除。
+- 新增自定义会话分组，支持创建、重命名、调整分组与会话顺序；分组独立于原工作目录，移除分组保留会话。
+- 本地删除统一保留可恢复备份，包含父会话和所属子代理；跳过正在运行或加载的会话，不调用云端删除接口。
+- 子代理从侧栏、归档和搜索列表中隐藏，通过主会话内的列表和只读详情页查看，支持下级代理导航。
+- 侧栏默认宽度调整到 360px，支持拖动与键盘调节；细化设置页、账户卡片、分组图标和列表布局。
+- 思考内容默认显示紧凑滚动预览，可手动展开；向上滚动暂停跟随，结束后保留用户选择的展开状态。
+- 主列表在窗口重新聚焦时及可见期间定期刷新；新增会话管理与子代理回归测试。
+
+### English
+
+- Added a session manager with title, directory and group filtering, result selection, and batch pinning, archiving, moving and deletion.
+- Added custom conversation groups with creation, renaming and group/conversation ordering. Membership leaves the original workspace unchanged; removing a group preserves its conversations.
+- Local deletion now retains recoverable backups of parents and owned subagents, skips running/loading conversations, and never calls the cloud deletion endpoint.
+- Child conversations are hidden from the sidebar, archive and search. View them through their parent with read-only details and nested-agent navigation.
+- Widened the default sidebar to 360px with drag and keyboard resizing; refined settings, account cards, folder icons and list spacing.
+- Thinking starts as a compact scrolling preview with optional expansion. Scrolling upward pauses following, and completion preserves the chosen expanded state.
+- The main list refreshes on window focus and periodically while visible; added session-management and subagent regressions.
+
+---
+
 ## 0.6.0 — 2026-10-01
 
 ### 中文

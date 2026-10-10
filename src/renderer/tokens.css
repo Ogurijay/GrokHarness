@@ -27,7 +27,7 @@
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", sans-serif;
   --font-group: var(--font-ui);
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "Consolas", monospace;
-  --sidebar: 260px;
+  --sidebar: 360px;
   --rail: 52px;
   --inspector: 320px;
   --thread: 48rem;

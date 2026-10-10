@@ -17,15 +17,20 @@ import type {
   SessionRef,
   SessionRunStats,
   SessionSummary,
+  SessionOrganization,
+  SessionBatchAction,
+  SessionBatchResult,
   SessionSort,
   StartOptions,
   TimelineItem,
   ToolDiff,
 } from "../shared/types";
-import { normalizeGroupKey, parseGroupSort, parseSessionSort } from "../shared/types";
+import { isMainSession, normalizeGroupKey, parseGroupSort, parseSessionSort } from "../shared/types";
+import { cleanGroupName, customGroupKey, normalizeOrganization, removeCustomGroup } from "../shared/session-organization";
+import { activeLocalSessionIds, collectSessionTree, retireLocalSessions } from "./session-management";
 import { resolveGrokBinary } from "./resolve-binary";
 import { startGrokServe, stopGrokServe, type ServeHandle } from "./grok-process";
-import { listLocalSessions, purgeSession, sanitizeSessionTitle, writeSessionTitle } from "./session-store";
+import { listLocalSessions, sanitizeSessionTitle, writeSessionTitle } from "./session-store";
 import { loadSessionTranscript } from "./session-transcript";
 import { LocalDb } from "./local-db";
 import { fetchQuota, loadAccountSeed, parseUsagePayload } from "./account";
@@ -226,6 +231,7 @@ export class AgentHost {
     sessionSort: "recent",
     groupOrder: [],
     sessionOrder: {},
+    sessionOrganization: { groups: [], assignments: {} },
     account: { connection: "idle" },
     commands: mergeSlashCommands(),
     settings: GROK_SETTINGS_DEFAULTS,
@@ -298,6 +304,7 @@ export class AgentHost {
       sessionSort: parseSessionSort(this.readSidebarPrefs()?.sessionSort ?? this.db.getKv("sessionSort")),
       groupOrder: this.readGroupOrder(),
       sessionOrder: this.readSessionOrder(),
+      sessionOrganization: normalizeOrganization(this.db.getJson("sessionOrganization", {})),
       alwaysApprove: this.db.getBool("alwaysApprove", false),
       sessionMode: (this.db.getKv("lastMode") as SessionMode | undefined) ?? "ask",
       workspace: this.db.getKv("lastWorkspace"),
@@ -658,6 +665,96 @@ export class AgentHost {
     });
   }
 
+  private sessionManagementBusy = false;
+
+  private saveOrganization(value: SessionOrganization): void {
+    const sessionOrganization = normalizeOrganization(value);
+    this.db.setKv("sessionOrganization", JSON.stringify(sessionOrganization));
+    this.patch({ sessionOrganization });
+  }
+
+  saveSessionGroup(id: string | undefined, name: string): void {
+    const clean = cleanGroupName(name);
+    if (!clean) throw new Error("请输入分组名称");
+    const organization = normalizeOrganization(this.snapshot.sessionOrganization);
+    if (organization.groups.some((group) => group.id !== id && group.name.toLocaleLowerCase() === clean.toLocaleLowerCase())) throw new Error("已经有同名分组");
+    if (id) {
+      const group = organization.groups.find((group) => group.id === id);
+      if (!group) throw new Error("找不到分组");
+      group.name = clean;
+    } else {
+      const groupId = randomUUID();
+      organization.groups.push({ id: groupId, name: clean });
+      this.reorderGroups([...this.snapshot.groupOrder, customGroupKey(groupId)]);
+    }
+    this.saveOrganization(organization);
+  }
+
+  removeSessionGroup(id: string): void {
+    this.saveOrganization(removeCustomGroup(normalizeOrganization(this.snapshot.sessionOrganization), id));
+    const key = customGroupKey(id);
+    const sessionOrder = { ...this.snapshot.sessionOrder };
+    delete sessionOrder[key];
+    const groupOrder = this.snapshot.groupOrder.filter((item) => item !== key);
+    const collapsedGroups = this.snapshot.collapsedGroups.filter((item) => item !== key);
+    this.writeSidebarPrefs({ sessionOrder, groupOrder, collapsedGroups });
+    this.patch({ sessionOrder, groupOrder, collapsedGroups });
+  }
+
+  async manageSessions(ids: string[], action: SessionBatchAction, groupId?: string): Promise<SessionBatchResult> {
+    if (this.sessionManagementBusy) throw new Error("上一批会话操作还未完成");
+    if (!["pin", "unpin", "archive", "unarchive", "move", "delete"].includes(action)) throw new Error("未知会话操作");
+    this.sessionManagementBusy = true;
+    try {
+      await this.loadLocalSessions();
+      const requested = [...new Set(ids)].slice(0, 2000);
+      const rows = this.snapshot.sessions.filter((row) => requested.includes(row.sessionId) && isMainSession(row));
+      const organization = normalizeOrganization(this.snapshot.sessionOrganization);
+      if (action === "move" && groupId && !organization.groups.some((group) => group.id === groupId)) throw new Error("目标分组不存在");
+      const processedIds: string[] = [];
+      const errors: string[] = [];
+      let backupPath: string | undefined;
+      if (action === "delete") {
+        const registered = await activeLocalSessionIds();
+        const idle = rows.filter((row) => {
+          const tree = collectSessionTree(this.snapshot.sessions, [row.sessionId]);
+          const running = tree.some((child) => registered.has(child.sessionId) || child.sessionId === this.loadingSessionId || child.running || (child.sessionId === this.snapshot.sessionId && this.snapshot.busy));
+          if (running) errors.push(`${row.title || row.sessionId}：正在运行或加载，已跳过`);
+          return !running;
+        });
+        if (idle.length) {
+          // Close an idle loaded session before moving its durable files, so an
+          // agent's final persistence on close cannot recreate the removed folder.
+          if (this.snapshot.sessionId && idle.some((row) => row.sessionId === this.snapshot.sessionId) && this.client?.connected) {
+            try { await this.client.request("session/close", { sessionId: this.snapshot.sessionId }, 8000); } catch { /* optional ACP method */ }
+          }
+          const result = await retireLocalSessions(collectSessionTree(this.snapshot.sessions, idle.map((row) => row.sessionId)));
+          backupPath = result.backupPath;
+          errors.push(...result.errors);
+          for (const id of result.movedIds) { this.db.deleteFlags(id); delete organization.assignments[id]; }
+          processedIds.push(...idle.filter((row) => result.movedIds.includes(row.sessionId)).map((row) => row.sessionId));
+          if (this.snapshot.sessionId && result.movedIds.includes(this.snapshot.sessionId)) {
+            this.patch({ sessionId: undefined, sessionTitle: undefined, timeline: [], permission: undefined, promptQueue: [], runStats: {} });
+          }
+          this.saveOrganization(organization);
+        }
+      } else {
+        for (const row of rows) {
+          if (action === "pin" || action === "unpin") this.db.setPinned(row.sessionId, action === "pin");
+          if (action === "archive" || action === "unarchive") this.db.setArchived(row.sessionId, action === "archive");
+          if (action === "move") {
+            if (groupId) organization.assignments[row.sessionId] = groupId;
+            else delete organization.assignments[row.sessionId];
+          }
+          processedIds.push(row.sessionId);
+        }
+        if (action === "move") this.saveOrganization(organization);
+      }
+      await this.loadLocalSessions();
+      return { snapshot: this.getSnapshot(), processedIds, skippedIds: requested.filter((id) => !processedIds.includes(id)), errors, backupPath };
+    } finally { this.sessionManagementBusy = false; }
+  }
+
   async renameSession(sessionId: string, title: string): Promise<void> {
     const clean = sanitizeSessionTitle(title);
     if (!clean) return;
@@ -684,66 +781,21 @@ export class AgentHost {
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    const known = this.snapshot.sessions.find((row) => row.sessionId === sessionId);
-    if (this.snapshot.sessionId === sessionId) {
-      if (this.snapshot.busy) {
-        try {
-          await this.cancel();
-        } catch {
-          /* continue */
-        }
-      }
-      if (this.client?.connected) {
-        try {
-          await this.client.request("session/close", { sessionId }, 8_000);
-        } catch {
-          /* grok 可能没有实现 close */
-        }
-      }
-      this.patch({
-        sessionId: undefined,
-        sessionTitle: undefined,
-        timeline: [],
-        workspace: undefined,
-        busy: false,
-        permission: undefined,
-      });
-    }
-
-    let binary: string | undefined = this.grokBinary;
-    if (!binary) {
-      try {
-        binary = resolveGrokBinary();
-      } catch {
-        binary = undefined;
-      }
-    }
-    await purgeSession(sessionId, known?.cwd, binary);
-    this.db.deleteFlags(sessionId);
-    await this.loadLocalSessions();
-    if (this.snapshot.sessions.some((row) => row.sessionId === sessionId)) {
-      throw new Error("会话删除失败，目录仍在。");
-    }
+    const result = await this.manageSessions([sessionId], "delete");
+    if (result.errors.length) throw new Error(result.errors.join("\n"));
   }
 
   async deleteArchivedSessions(sessionIds?: string[]): Promise<void> {
     const allow = new Set(
-      this.snapshot.sessions.filter((session) => session.archived).map((session) => session.sessionId),
+      this.snapshot.sessions.filter((session) => session.archived && isMainSession(session)).map((session) => session.sessionId),
     );
     const ids = [
       ...new Set(
-        (sessionIds?.length ? sessionIds : [...allow]).map(String).filter((id) => allow.has(id)),
+        (sessionIds ?? [...allow]).map(String).filter((id) => allow.has(id)),
       ),
     ];
-    const errors: string[] = [];
-    for (const id of ids) {
-      try {
-        await this.deleteSession(id);
-      } catch (err) {
-        errors.push(err instanceof Error ? err.message : String(err));
-      }
-    }
-    if (errors.length) throw new Error(errors[0] ?? "部分会话删除失败");
+    const result = await this.manageSessions(ids, "delete");
+    if (result.errors.length) throw new Error(result.errors.join("\n"));
   }
 
   setSidebarCollapsed(collapsed: boolean): void {
@@ -832,11 +884,10 @@ export class AgentHost {
     const target = cwd.trim();
     if (!target) return;
     const ids = this.snapshot.sessions
-      .filter((session) => (session.cwd?.trim() || "(unknown)") === target)
+      .filter((session) => (session.cwd?.trim() || "(unknown)") === target && isMainSession(session))
       .map((session) => session.sessionId);
-    for (const sessionId of ids) {
-      await this.deleteSession(sessionId);
-    }
+    const result = await this.manageSessions(ids, "delete");
+    if (result.errors.length) throw new Error(result.errors.join("\n"));
     this.revealWorkspace(target);
     if (this.snapshot.workspace?.trim() === target) {
       this.db.setKv("lastWorkspace", "");

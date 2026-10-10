@@ -13,10 +13,15 @@ import type {
   SessionRef,
   SessionSort,
   SessionSummary,
+  SessionOrganization,
+  SubagentSummary,
+  SubagentView,
   TimelineItem,
   ToolDiff,
 } from "../shared/types";
-import { normalizeGroupKey } from "../shared/types";
+import { normalizeGroupKey, isMainSession } from "../shared/types";
+import { customGroupKey, sessionCustomGroup } from "../shared/session-organization";
+import { SessionManager } from "./SessionManager";
 import { CodeView, prettyUnknown } from "./CodeView";
 import { formatDuration, formatElapsedClock, formatSessionElapsed, formatTokens } from "../shared/step-stats";
 import { GROK_SETTINGS_DEFAULTS } from "../shared/grok-settings";
@@ -26,11 +31,11 @@ import { UpdatePanel } from "./UpdatePanel";
 import { DesktopPanel } from "./DesktopPanel";
 import { UsagePanel } from "./UsagePanel";
 import { MediaStudio, type StudioTab } from "./MediaStudio";
-import { Image as ImageIcon, Mic, MoreHorizontal, PanelLeft, PanelRight, Plus, Search, Settings as SettingsIcon, Video, FolderOpen, FolderClosed, ChevronsDown, ChevronsUp, ListFilter } from "lucide-react";
+import { Image as ImageIcon, Mic, MoreHorizontal, PanelLeft, PanelRight, Plus, Search, Settings as SettingsIcon, Video, FolderOpen, FolderClosed, ChevronsDown, ChevronsUp, ListFilter, ListChecks, GitBranch, ArrowLeft, ChevronRight } from "lucide-react";
 import { SidebarNavigation } from "./ui/SidebarNavigation";
 import { SearchDialog } from "./ui/SearchDialog";
 import { Dialog } from "./ui/Dialog";
-import { useAppearance } from "./ui/appearance";
+import { useAppearance, clampSidebarWidth } from "./ui/appearance";
 
 const empty: AppSnapshot = {
   connection: "idle",
@@ -513,12 +518,12 @@ function toolRole(item: Extract<TimelineItem, { kind: "tool" }>): ToolRole {
 }
 
 function thoughtLabel(item: Extract<TimelineItem, { kind: "thought" }>, live: boolean): string {
-  if (item.interrupted) return "Thought interrupted";
+  if (item.interrupted) return "思考已中断";
   const duration = formatDuration(
-    item.durationMs ?? (live && item.at != null ? Math.max(0, Date.now() - item.at) : undefined),
+    live && item.at != null ? Math.max(0, Date.now() - item.at) : item.durationMs,
   );
-  if (live && !item.durationMs) return duration ? `Thought for ${duration}` : "Thinking…";
-  return duration ? `Thought for ${duration}` : "Thought";
+  if (live) return duration ? `正在思考 · ${duration}` : "正在思考…";
+  return duration ? `思考 · ${duration}` : "思考";
 }
 
 function toolLabel(item: Extract<TimelineItem, { kind: "tool" }>): { role: ToolRole; text: string; added?: number; removed?: number } {
@@ -649,12 +654,23 @@ function useLiveFold(live: boolean) {
 
 function ThoughtRow({ item }: { item: Extract<TimelineItem, { kind: "thought" }> }) {
   const live = Boolean(item.streaming);
-  const foldRef = useLiveFold(live);
+  const [expanded, setExpanded] = useState(false);
+  const [, tick] = useState(0);
+  const preview = useRef<HTMLDivElement>(null);
+  const follow = useRef(true);
+  useEffect(() => {
+    if (!live) return;
+    const timer = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, [live]);
+  useEffect(() => {
+    if (!expanded && follow.current && preview.current) preview.current.scrollTop = preview.current.scrollHeight;
+  }, [item.text, expanded]);
   const hasBody = live || !isBlank(item.text);
   const row = (
     <>
       <span className={`op-fold ${hasBody ? "" : "empty"}`}>{hasBody ? <FoldChevron /> : null}</span>
-      <span className="op-glyph thought" aria-hidden="true">
+      <span className={`op-glyph thought${live ? " thinking-pulse" : ""}`} aria-hidden="true">
         ◆
       </span>
       <span className="op-copy">{thoughtLabel(item, live)}</span>
@@ -664,13 +680,18 @@ function ThoughtRow({ item }: { item: Extract<TimelineItem, { kind: "thought" }>
     return <div className={`op-row thought${item.interrupted ? " interrupted" : ""}`}>{row}</div>;
   }
   return (
-    <details
-      ref={foldRef}
-      className={`op-item thought${item.interrupted ? " interrupted" : ""}${live ? " live" : ""}`}
-    >
-      <summary className="op-row thought">{row}</summary>
-      <div className="thought-inline">{isBlank(item.text) ? <StreamingDots /> : item.text}</div>
-    </details>
+    <div className={`op-item thought${item.interrupted ? " interrupted" : ""}${live ? " live" : ""}`}>
+      <button type="button" className={`op-row thought thought-toggle${expanded ? " expanded" : ""}`} aria-expanded={expanded} onClick={() => { follow.current = true; setExpanded((value) => !value); }}>
+        {row}<span className="thought-action">{expanded ? "收起" : "展开"}</span>
+      </button>
+      {expanded ? (
+        <div className="thought-inline thought-full md">{isBlank(item.text) ? <StreamingDots /> : <Markdown remarkPlugins={[remarkGfm]}>{item.text}</Markdown>}</div>
+      ) : (
+        <div className="thought-preview" ref={preview} tabIndex={0} aria-label="思考滚动预览" onWheel={(event) => { if (event.deltaY < 0) follow.current = false; }} onScroll={(event) => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 12; }}>
+          {isBlank(item.text) ? <StreamingDots /> : item.text}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -807,9 +828,8 @@ const TimelineView = memo(function TimelineView({
   onOpenImage: (path: string, preview?: string, name?: string) => void;
 }) {
   const blocks = useMemo(() => {
-    const grouped = groupTools ? groupTimeline(items) : items.map((item) => ({ type: "single" as const, item }));
-    if (showThoughts) return grouped;
-    return grouped.filter((block) => !(block.type === "single" && block.item.kind === "thought"));
+    const visible = showThoughts ? items : items.filter((item) => item.kind !== "thought");
+    return groupTools ? groupTimeline(visible) : visible.map((item) => ({ type: "single" as const, item }));
   }, [items, groupTools, showThoughts]);
   const waiting = Boolean(busy) && !items.some(isLiveItem);
   const lastBlock = blocks[blocks.length - 1];
@@ -1174,6 +1194,7 @@ type SessionGroup = {
   cwd?: string;
   sessions: SessionSummary[];
   nested?: SessionGroup[];
+  custom?: boolean;
 };
 
 function PopupMenu({ x, y, items }: { x: number; y: number; items: MenuEntry[] }) {
@@ -1239,6 +1260,104 @@ function HoverCard({
   );
 }
 
+function SubagentStatus({ agent }: { agent: SubagentSummary }) {
+  const active = ["running", "pending", "starting", "in_progress"].includes(agent.status);
+  const label = ({ completed: "已完成", failed: "失败", cancelled: "已取消", stopped: "已停止", running: "运行中", pending: "等待中", starting: "启动中", in_progress: "运行中" } as Record<string, string>)[agent.status] ?? "状态未知";
+  return <span className={`subagent-status ${active ? "running" : agent.status}`}><i />{label}</span>;
+}
+
+function SubagentRow({ agent, selected, onOpen }: { agent: SubagentSummary; selected?: boolean; onOpen: () => void }) {
+  return <button type="button" className={`subagent-row${selected ? " selected" : ""}`} onClick={onOpen}>
+    <GitBranch size={16} /><span className="subagent-row-copy"><strong>{agent.description}</strong><small>{agent.agentType}{agent.toolCalls != null ? ` · ${agent.toolCalls} 次工具调用` : ""}</small></span>
+    <SubagentStatus agent={agent} /><ChevronRight size={14} />
+  </button>;
+}
+
+/** Child views read durable records without switching or cancelling the parent. */
+function SubagentsPane({ sessionId, onOpenImage }: { sessionId: string; onOpenImage: (path: string, preview?: string, name?: string) => void }) {
+  const [agents, setAgents] = useState<SubagentSummary[]>([]);
+  const [path, setPath] = useState<SubagentSummary[]>([]);
+  const [view, setView] = useState<SubagentView>();
+  const [error, setError] = useState<string>();
+  const [loading, setLoading] = useState(false);
+  const [toolId, setToolId] = useState<string>();
+  const content = useRef<HTMLDivElement>(null);
+  const follow = useRef(true);
+  const selected = path.at(-1);
+  useEffect(() => {
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try { const rows = await window.grok.listSubagents(sessionId); if (!disposed) setAgents(rows); }
+      catch { /* Retry while the parent log is being written. */ }
+      finally { if (!disposed) timer = setTimeout(() => void refresh(), 3000); }
+    };
+    void refresh();
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [sessionId]);
+  useEffect(() => {
+    if (!selected) return;
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    setView(undefined); setError(undefined); setLoading(true); setToolId(undefined); follow.current = true;
+    if (content.current) content.current.scrollTop = 0;
+    const refresh = async () => {
+      try {
+        const next = await window.grok.readSubagent(selected.parentSessionId, selected.id);
+        if (!disposed) { setView(next); setError(undefined); }
+      } catch (err) { if (!disposed) setError(err instanceof Error ? err.message : String(err)); }
+      finally { if (!disposed) { setLoading(false); timer = setTimeout(() => void refresh(), 2500); } }
+    };
+    void refresh();
+    return () => { disposed = true; clearTimeout(timer); };
+  }, [selected?.parentSessionId, selected?.id]);
+  useEffect(() => {
+    if (content.current && follow.current && view && ["running", "pending", "starting", "in_progress"].includes(view.agent.status)) {
+      content.current.scrollTop = content.current.scrollHeight;
+    }
+  }, [view]);
+  if (!agents.length) return null;
+  const agent = view?.agent ?? selected;
+  const active = agents.filter((row) => ["running", "pending", "starting", "in_progress"].includes(row.status)).length;
+  return <>
+    <details className="subagents-card" open>
+      <summary><GitBranch size={16} /><strong>子代理</strong><span>{agents.length} 个{active ? ` · ${active} 个运行中` : ""}</span><FoldChevron /></summary>
+      <div className="subagent-list">{agents.map((row) => <SubagentRow key={row.id} agent={row} onOpen={() => setPath([row])} />)}</div>
+    </details>
+    {selected && agent ? <Dialog title="子代理详情" className="subagent-panel" onClose={() => setPath([])}>
+      <div className="subagent-layout">
+        <nav className="subagent-nav" aria-label="所属对话的子代理">{agents.map((row) => <SubagentRow key={row.id} agent={row} selected={path[0]?.id === row.id} onOpen={() => setPath([row])} />)}</nav>
+        <div className="subagent-main">
+          <header className="subagent-heading">
+            {path.length > 1 ? <button type="button" className="btn ghost tiny" onClick={() => setPath((rows) => rows.slice(0, -1))}><ArrowLeft size={14} />返回上级子代理</button> : null}
+            <div className="subagent-title"><h3>{agent.description}</h3><SubagentStatus agent={agent} /></div>
+            <p>{agent.agentType}{agent.modelId ? ` · ${agent.modelId}` : ""}{agent.durationMs != null ? ` · ${formatSessionElapsed(agent.durationMs)}` : ""}{agent.toolCalls != null ? ` · ${agent.toolCalls} 次工具调用` : ""}</p>
+          </header>
+          <div className="subagent-transcript" ref={content} onWheel={(event) => { if (event.deltaY < 0) follow.current = false; }} onScroll={(event) => { const el = event.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
+            {agent.prompt ? <details className="subagent-task"><summary>派发任务</summary><div className="md"><Markdown remarkPlugins={[remarkGfm]}>{agent.prompt}</Markdown></div></details> : null}
+            {loading ? <div className="subagent-empty">正在读取子代理记录…</div> : null}
+            {error ? <div className="error-banner" role="alert">{error}</div> : null}
+            {view?.subagents.length ? <section className="subagent-children"><h4>下级子代理</h4>{view.subagents.map((child) => <SubagentRow key={child.id} agent={child} onOpen={() => setPath((rows) => [...rows, child])} />)}</section> : null}
+            {view ? <div className="thread subagent-thread"><TimelineView items={view.timeline} busy={["running", "pending", "starting", "in_progress"].includes(agent.status)} groupTools selectedId={toolId} onSelectTool={(tool) => setToolId(tool.id)} showTimestamps onOpenImage={onOpenImage} /></div> : null}
+            {view && !view.timeline.length ? <div className="subagent-empty">{agent.sessionId ? "尚未写入会话内容" : "子代理尚未创建会话"}</div> : null}
+            {view?.timeline.find((item) => item.kind === "tool" && item.id === toolId)?.kind === "tool" ? <div className="subagent-tool-detail"><Inspector item={view.timeline.find((item): item is Extract<TimelineItem, { kind: "tool" }> => item.kind === "tool" && item.id === toolId)} /></div> : null}
+          </div>
+        </div>
+      </div>
+    </Dialog> : null}
+  </>;
+}
+
+function SidebarResize({ width, onChange }: { width: number; onChange: (width: number) => void }) {
+  const drag = useRef<{ x: number; width: number } | undefined>(undefined);
+  return <div className="sidebar-resize" role="separator" aria-label="调整对话栏宽度" aria-orientation="vertical" tabIndex={0} aria-valuemin={280} aria-valuemax={520} aria-valuenow={width}
+    onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); drag.current = { x: event.clientX, width }; event.currentTarget.setPointerCapture(event.pointerId); }}
+    onPointerMove={(event) => { if (drag.current) onChange(clampSidebarWidth(drag.current.width + event.clientX - drag.current.x)); }}
+    onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }}
+    onDoubleClick={() => onChange(360)}
+    onKeyDown={(event) => { if (["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) { event.preventDefault(); onChange(event.key === "Home" ? 360 : clampSidebarWidth(width + (event.key === "ArrowRight" ? 16 : -16))); } }} />;
+}
+
 export function App() {
   const [state, setState] = useState<AppSnapshot>(empty);
   const [selectedToolId, setSelectedToolId] = useState<string | undefined>();
@@ -1246,6 +1365,7 @@ export function App() {
   const [accountOpen, setAccountOpen] = useState(false);
   const accountDockRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sessionManager, setSessionManager] = useState<{ ids?: string[]; group?: string }>();
   const [searchOpen, setSearchOpen] = useState(false);
   const [appearance, setAppearance] = useAppearance();
   const [desktopOpen, setDesktopOpen] = useState(false);
@@ -1286,6 +1406,21 @@ export function App() {
   useEffect(() => {
     if (state.inspectorWidth) setInspectorWidth(state.inspectorWidth);
   }, [state.inspectorWidth]);
+
+  useEffect(() => {
+    let disposed = false;
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing || document.visibilityState !== "visible") return;
+      refreshing = true;
+      try { const next = await window.grok.refreshSessions(); if (!disposed) setState(next); }
+      catch { /* Keep the last snapshot if the local refresh is unavailable. */ }
+      finally { refreshing = false; }
+    };
+    window.addEventListener("focus", refresh);
+    const timer = window.setInterval(() => void refresh(), 30000);
+    return () => { disposed = true; window.removeEventListener("focus", refresh); window.clearInterval(timer); };
+  }, []);
 
   useEffect(() => {
     followOutput.current = true;
@@ -1617,12 +1752,12 @@ export function App() {
   const quota = account.quota;
   const used = quota?.usedPercent ?? (quota?.remainingPercent != null ? 100 - quota.remainingPercent : undefined);
   const liveSessions = useMemo(
-    () => state.sessions.filter((session) => !session.archived),
+    () => state.sessions.filter((session) => !session.archived && isMainSession(session)),
     [state.sessions],
   );
   const archivedSessions = useMemo(
     () => sortSessions(
-      state.sessions.filter((session) => session.archived),
+      state.sessions.filter((session) => session.archived && isMainSession(session)),
       state.sessionSort,
       false,
       state.sessionOrder?.__archived__,
@@ -1630,8 +1765,8 @@ export function App() {
     [state.sessions, state.sessionSort, state.sessionOrder],
   );
   const allLiveGroups = useMemo(
-    () => buildGroups(liveSessions, state.groupSort, state.sessionSort, state.groupOrder ?? [], state.sessionOrder ?? {}),
-    [liveSessions, state.groupSort, state.sessionSort, state.groupOrder, state.sessionOrder],
+    () => buildGroups(liveSessions, state.groupSort, state.sessionSort, state.groupOrder ?? [], state.sessionOrder ?? {}, state.sessionOrganization),
+    [liveSessions, state.groupSort, state.sessionSort, state.groupOrder, state.sessionOrder, state.sessionOrganization],
   );
   const hiddenKeySet = useMemo(() => new Set(state.hiddenGroups), [state.hiddenGroups]);
   const liveGroups = useMemo(
@@ -1761,6 +1896,10 @@ export function App() {
   const sessionMenuItems: MenuEntry[] = menuSession
     ? [
         {
+          type: "item", id: "manage", label: "移动到分组 / 批量管理",
+          onClick: () => { setMenu(undefined); setSessionManager({ ids: [menuSession.sessionId] }); },
+        },
+        {
           type: "item",
           id: "rename",
           label: "重命名",
@@ -1816,6 +1955,10 @@ export function App() {
     : [];
   const groupMenuItems: MenuEntry[] = menuGroup
     ? [
+        {
+          type: "item", id: "manage-group", label: "管理这个分组的会话",
+          onClick: () => { setMenu(undefined); setSessionManager({ group: menuGroup.custom ? menuGroup.key : menuGroup.cwd ? `workspace:${menuGroup.cwd}` : menuGroup.key === "__archived__" ? "__archived__" : "__all__" }); },
+        },
         ...(menuGroup.cwd
           ? [
               {
@@ -1968,7 +2111,7 @@ export function App() {
   const firstProjectKey = liveGroups.find((group) => group.key !== "__pinned__")?.key;
   const listToolbar = (
     <div className="workspace-actions">
-            <span className="nav-section-label">项目</span>
+            <span className="nav-section-label">{state.sessionOrganization?.groups.length ? "项目与分组" : "项目"}</span>
             {(liveGroups.length > 0 || archivedSessions.length > 0) && (
               <div className="group-bulk">
                 <button
@@ -2030,12 +2173,14 @@ export function App() {
 
   return (
     <div className={appClass} style={{ ["--inspector" as string]: `${inspectorWidth}px` }}>
+      {!state.sidebarCollapsed ? <SidebarResize width={appearance.sidebarWidth} onChange={(width) => setAppearance((prev) => ({ ...prev, sidebarWidth: width }))} /> : null}
       {state.sidebarCollapsed ? (
         <aside className="rail pane">
           <button className="icon-btn" type="button" title="展开侧栏" onClick={() => void window.grok.setSidebarCollapsed(false)}>
             <PanelLeft size={18} />
           </button>
           <button className="icon-btn" type="button" title="搜索对话" aria-label="搜索对话" onClick={() => setSearchOpen(true)}><Search size={18} /></button>
+          <button className="icon-btn" type="button" title="管理会话" aria-label="管理会话" onClick={() => setSessionManager({})}><ListChecks size={18} /></button>
           <button className="icon-btn" type="button" title="添加对话" onClick={() => void beginNew()}>
             <Plus size={18} />
           </button>
@@ -2095,7 +2240,7 @@ export function App() {
               <PanelLeft size={16} />
             </button>
           </div>
-          <SidebarNavigation studioTab={studioTab} onNew={() => void beginNew()} onSearch={() => setSearchOpen(true)} onWorkspace={() => void pickAndStart()} onStudio={setStudioTab} />
+          <SidebarNavigation studioTab={studioTab} onNew={() => void beginNew()} onSearch={() => setSearchOpen(true)} onWorkspace={() => void pickAndStart()} onStudio={setStudioTab} onManage={() => setSessionManager({})} />
 
 
           <div className="session-list">
@@ -2111,22 +2256,28 @@ export function App() {
                 <section className={`session-group ${group.key === "__pinned__" ? "pinned" : "project"}`}>
                   <header
                     className={`session-group-head ${menu?.kind === "group" && menu.id === group.key ? "menu-open" : ""} ${sidebarDrag?.kind === "group" && sidebarDrag.key === group.key ? "dragging" : ""} ${sidebarDrag?.kind === "group" && sidebarDrag.overId === group.key ? `drop-${sidebarDrag.edge}` : ""}`}
-                    draggable={Boolean(group.cwd)}
+                    draggable={Boolean(group.cwd || group.custom)}
                     onMouseEnter={(event) => showGroupHover(event, group)}
                     onMouseLeave={hideGroupHover}
                     onContextMenu={(event) => placeMenu(event, { kind: "group", id: group.key })}
                     onDragStart={(event) => {
-                      if (!group.cwd) {
+                      if (!group.cwd && !group.custom) {
                         event.preventDefault();
                         return;
                       }
                       beginGroupDrag(event, group.key);
                     }}
                     onDragOver={(event) => {
-                      if (group.cwd) hoverDrop(event, "group", group.key);
+                      const dragging = sidebarDragRef.current ?? parseDrag(event);
+                      if (group.custom && dragging?.kind === "session") { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }
+                      else if (group.cwd || group.custom) hoverDrop(event, "group", group.key);
                     }}
                     onDrop={(event) => {
-                      if (group.cwd) dropGroup(event, group.key);
+                      const dragging = parseDrag(event);
+                      if (group.custom && dragging?.kind === "session") {
+                        event.preventDefault(); setSidebarDrag(undefined); sidebarDragRef.current = undefined;
+                        void window.grok.manageSessions([dragging.id], "move", group.key.slice("__custom__:".length)).then((result) => { setState(result.snapshot); if (result.errors.length) setBusyError(result.errors.join("\n")); }).catch((err) => setBusyError(String(err)));
+                      } else if (group.cwd || group.custom) dropGroup(event, group.key);
                     }}
                     onDragEnd={() => {
                       sidebarDragRef.current = undefined;
@@ -2152,7 +2303,7 @@ export function App() {
                         }
                       }}
                     >
-                      {group.cwd ? (isCollapsed ? <FolderClosed className="project-folder" size={16} /> : <FolderOpen className="project-folder" size={16} />) : <FoldChevron open={!isCollapsed} />}
+                      {group.cwd || group.custom ? (isCollapsed ? <FolderClosed className="project-folder" size={16} /> : <FolderOpen className="project-folder" size={16} />) : <FoldChevron open={!isCollapsed} />}
                       <span className="session-group-copy">
                         <strong>{group.label}</strong>
                       </span>
@@ -2163,11 +2314,11 @@ export function App() {
                         +
                       </button>
                     )}
-                    {group.cwd ? (
+                    {group.cwd || group.custom ? (
                       <button
                         className="kebab"
                         type="button"
-                        title="工作区操作"
+                        title="分组操作"
                         draggable={false}
                         onClick={(event) => placeMenu(event, { kind: "group", id: group.key })}
                       >
@@ -2176,6 +2327,7 @@ export function App() {
                     ) : null}
                   </header>
                   <Fold collapsed={isCollapsed}>
+                    {group.custom && !group.sessions.length && <button className="custom-group-empty" onClick={() => setSessionManager({ group: group.key })}>添加会话到分组</button>}
                     {nested.length > 0
                       ? nested.map((child) => {
                           const childCollapsed = state.collapsedGroups.includes(child.key);
@@ -2667,6 +2819,7 @@ export function App() {
               }}
             >
               <div className="thread">
+                {state.sessionId ? <SubagentsPane key={state.sessionId} sessionId={state.sessionId} onOpenImage={openImage} /> : null}
                 {currentSession?.updateInterrupted ? (
                   <div className="interrupt-banner">
                     <span>这次对话在 Grok Build 更新时被打断，不是手动中断。</span>
@@ -2781,7 +2934,8 @@ export function App() {
         />
       )}
 
-      {searchOpen && <SearchDialog sessions={state.sessions} onOpen={(session) => void openSession(session)} onClose={() => setSearchOpen(false)} />}
+      {searchOpen && <SearchDialog sessions={state.sessions.filter(isMainSession)} onOpen={(session) => void openSession(session)} onClose={() => setSearchOpen(false)} />}
+      {sessionManager && <SessionManager state={state} onState={setState} onClose={() => setSessionManager(undefined)} initialIds={sessionManager.ids} initialGroup={sessionManager.group} />}
       <DesktopPanel open={desktopOpen} onOpen={() => setDesktopOpen(true)} onClose={() => setDesktopOpen(false)} />
       {settingsOpen && (
         <SettingsPanel
@@ -2929,6 +3083,7 @@ function buildGroups(
   sessionSort: SessionSort,
   groupOrder: string[] = [],
   sessionOrder: Record<string, string[]> = {},
+  organization?: SessionOrganization,
 ): SessionGroup[] {
   const pinned = sessions.filter((session) => session.pinned);
   const unpinned = sessions.filter((session) => !session.pinned);
@@ -2940,7 +3095,12 @@ function buildGroups(
       sessions: sortSessions(pinned, sessionSort, true, sessionOrder?.__pinned__),
     });
   }
-  return [...groups, ...groupsByCwd(unpinned, sessionSort, groupSort, groupOrder, sessionOrder)];
+  const custom: SessionGroup[] = (organization?.groups ?? []).map((group) => ({
+    key: customGroupKey(group.id), label: group.name, custom: true,
+    sessions: sortSessions(unpinned.filter((session) => sessionCustomGroup(session, organization) === group.id), sessionSort, false, sessionOrder[customGroupKey(group.id)]),
+  }));
+  const workspace = groupsByCwd(unpinned.filter((session) => !sessionCustomGroup(session, organization)), sessionSort, groupSort, groupOrder, sessionOrder);
+  return [...groups, ...sortGroups([...custom, ...workspace], groupSort, groupOrder)];
 }
 
 function folderLabel(cwd: string): string {

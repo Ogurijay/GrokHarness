@@ -163,10 +163,13 @@ export async function loadSessionTranscript(
   if (!dir) return [];
   const items: TimelineItem[] = [];
   const cursor: StatsCursor = {};
+  const input = createReadStream(join(dir, "updates.jsonl"), { encoding: "utf8" });
   const rl = createInterface({
-    input: createReadStream(join(dir, "updates.jsonl"), { encoding: "utf8" }),
+    input,
     crlfDelay: Infinity,
   });
+  // A newly spawned child may have a summary before its first update file exists.
+  input.on("error", () => rl.close());
   try {
     for await (const line of rl) {
       if (!line.trim()) continue;
@@ -187,7 +190,11 @@ export async function loadSessionTranscript(
       applyUpdate(items, update, stats.at, stats.totalTokens, cursor);
     }
   } catch {
-    return items;
+    /* Keep the readable prefix of a log currently being written. */
+  } finally {
+    input.destroy();
   }
+  // Polling read-only child views must retain fold state and scroll anchors.
+  items.forEach((item, index) => { item.id = `${sessionId}:${item.kind === "tool" ? item.toolCallId : index}`; });
   return items;
 }

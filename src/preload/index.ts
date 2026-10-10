@@ -11,6 +11,10 @@ import type {
   SessionRef,
   SessionSort,
   StartOptions,
+  SubagentSummary,
+  SubagentView,
+  SessionBatchAction,
+  SessionBatchResult,
 } from "../shared/types";
 import type { GrokSettings } from "../shared/grok-settings";
 import type { DesktopState } from "../shared/desktop";
@@ -50,8 +54,13 @@ export type GrokApi = {
   cancel: () => Promise<AppSnapshot>;
   permission: (requestId: string, optionId: string | null) => Promise<AppSnapshot>;
   loadSession: (sessionId: string, cwd?: string) => Promise<AppSnapshot>;
+  listSubagents: (sessionId: string) => Promise<SubagentSummary[]>;
+  readSubagent: (parentSessionId: string, subagentId: string) => Promise<SubagentView>;
   openSession: (sessionId: string, cwd?: string) => Promise<AppSnapshot>;
   refreshSessions: () => Promise<AppSnapshot>;
+  manageSessions: (ids: string[], action: SessionBatchAction, groupId?: string) => Promise<SessionBatchResult>;
+  saveSessionGroup: (id: string | undefined, name: string) => Promise<AppSnapshot>;
+  removeSessionGroup: (id: string) => Promise<AppSnapshot>;
   renameSession: (sessionId: string, title: string) => Promise<AppSnapshot>;
   pinSession: (sessionId: string, pinned: boolean) => Promise<AppSnapshot>;
   archiveSession: (sessionId: string, archived: boolean) => Promise<AppSnapshot>;
@@ -133,8 +142,13 @@ const api: GrokApi = {
   cancel: () => ipcRenderer.invoke("grok:cancel"),
   permission: (requestId, optionId) => ipcRenderer.invoke("grok:permission", requestId, optionId),
   loadSession: (sessionId, cwd) => ipcRenderer.invoke("grok:loadSession", sessionId, cwd),
+  listSubagents: (sessionId) => ipcRenderer.invoke("grok:listSubagents", sessionId),
+  readSubagent: (parentSessionId, subagentId) => ipcRenderer.invoke("grok:readSubagent", parentSessionId, subagentId),
   openSession: (sessionId, cwd) => ipcRenderer.invoke("grok:openSession", sessionId, cwd),
   refreshSessions: () => ipcRenderer.invoke("grok:refreshSessions"),
+  manageSessions: (ids, action, groupId) => ipcRenderer.invoke("grok:manageSessions", ids, action, groupId),
+  saveSessionGroup: (id, name) => ipcRenderer.invoke("grok:saveSessionGroup", id, name),
+  removeSessionGroup: (id) => ipcRenderer.invoke("grok:removeSessionGroup", id),
   renameSession: (sessionId, title) => ipcRenderer.invoke("grok:renameSession", sessionId, title),
   pinSession: (sessionId, pinned) => ipcRenderer.invoke("grok:pinSession", sessionId, pinned),
   archiveSession: (sessionId, archived) => ipcRenderer.invoke("grok:archiveSession", sessionId, archived),

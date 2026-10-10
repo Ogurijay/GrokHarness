@@ -71,3 +71,18 @@ Grok Bot transport research is recorded separately in [GROK_BOT_INTEGRATION.md](
 At the user's request on 2026-10-01, a new NSIS installer was built in `release/local-ui-update/` with the same renderer assets above. It was installed over `C:\Users\OguriJay\AppData\Local\Programs\grok-harness` for the current user, without publishing a release. The local WIP version remains 0.6.0.
 
 The installer exited with code 0. SHA-256 of the installed `resources/app.asar` matches the new package and differs from the old installation. Before relaunch, `state.sqlite`, `Preferences` and `Local State` matched their pre-install SHA-256 values. The old installation and those profile files were backed up under `release/local-update-backup-20261001-113402/`. The app was relaunched from the installed path, and its main and renderer processes remained running. This verifies installation and process startup; native UI interaction and real prompt execution still require separate verification.
+
+## Settings refinement / 设置页细化
+
+2026-10-10, following the user's account settings screenshot:
+
+- Settings use a 960px maximum panel width, 204px navigation column and 56px header. The content area uses 32px horizontal padding; card rows use 20px horizontal padding and 58px minimum height.
+- All 14 categories have distinct icons. Switching category resets content scroll to the top. The search field stays visible during content scrolling.
+- Configuration headings sit outside their cards. Controls, separators and action rows have consistent alignment in light and dark themes.
+- The account header contains the avatar, email, plan and connection indicator. Model and version align to the right; quota usage includes a labelled progress bar. Missing data keeps its empty-state text. Account actions have full-width hover targets and inset content.
+
+`npm run typecheck`, `npm run build` and `git diff --check` passed. The real renderer with synthetic IPC was checked for category navigation, model fields, search results, light/dark appearance and account quota presentation. Measurements confirmed 20px card padding, 58px account rows and 14 distinct navigation icons. At 640×560, document width stayed 640px and settings content had no horizontal overflow. No fixture runtime errors were collected. These checks do not establish native settings interaction.
+
+Screenshots (synthetic data): `release/qa/settings-account-dark-20261010.png`, `settings-account-light-20261010.png`. The new package retains the sidebar, subagent and thought preview changes from the same working tree. Backup for this local update: `release/local-update-backup-20261010-102011/`.
+
+The settings update installer exited with code 0. Installed `app.asar` matches the new package (SHA-256 `C60A54BF9CF7FFBD70DFA2693D83972CA58E9E7BF110887B233309CE38E4A0C8`), and the installed HTML references the new renderer JS and CSS. Before relaunch, all three backed-up profile files retained their original hashes. The application was relaunched from the existing current-user installation directory; native settings interactions remain outside this browser fixture verification.

@@ -1,4 +1,4 @@
-# Grok-Harness v0.6.0
+# Grok-Harness v0.7.0
 
 Local Mac / Windows desktop shell for [Grok Build](https://github.com/xai-org/grok-build). The window talks to a local agent over ACP; it does not rewrite Grok.
 
@@ -17,9 +17,9 @@ Auth and sessions stay in `~/.grok` (`grok login` or `XAI_API_KEY`).
 
 ## Windows app / Windows 安装版
 
-Run `Grok-Harness-Setup-0.6.0.exe` to install for the current Windows user. Launch from the desktop or Start menu; Node.js is not required for the installed application. Grok Build remains a separately installed official CLI.
+Run the Windows installer from a release with desktop assets to install for the current user. Launch from the desktop or Start menu; Node.js is not required for the installed application. Grok Build remains a separately installed official CLI.
 
-运行 `Grok-Harness-Setup-0.6.0.exe` 为当前 Windows 用户安装，随后通过桌面或开始菜单双击启动；安装版无需 Node.js，但仍需要单独安装官方 Grok Build CLI。
+运行发行版提供的 Windows 安装包，为当前 Windows 用户安装，随后通过桌面或开始菜单双击启动；安装版无需 Node.js，但仍需要单独安装官方 Grok Build CLI。
 
 First launch checks the CLI and saved credentials. Missing prerequisites open the desktop panel automatically. Browser login uses the official `grok login --oauth`; credentials stay in `~/.grok`. The account menu and tray both provide “桌面应用与更新”. Closing the window keeps the tray running; tray Quit stops only this app's agent process. A second launch restores the existing window.
 
@@ -58,7 +58,17 @@ npm ci
 npm run build:win
 ```
 
-Output / 输出：`release/Grok-Harness-Setup-0.6.0.exe`.
+Output / 输出：`release/Grok-Harness-Setup-0.7.0.exe`.
+
+## Conversations / 会话管理
+
+Open **管理会话** in the sidebar to search and select conversations, batch pin/archive/delete, or move them into custom groups. Group names and order are editable; membership does not change the original working directory. Deletion moves local conversation files and owned subagent records to `~/.grok/session-cleanup-backups/`, skipping running sessions. Cloud history and project files are preserved.
+
+通过侧栏的 **管理会话** 搜索和勾选会话，批量置顶、归档、删除或移到自定义分组。分组可重命名，分组和会话均可调整顺序，不会改变原工作目录。本地删除会保留备份到 `~/.grok/session-cleanup-backups/`，包括所属子代理，并跳过运行中的会话；云端历史和项目文件保留。
+
+Subagents appear inside their parent conversation with read-only details and nested navigation. Thinking uses a compact scrolling preview by default and can expand on demand. The sidebar width is adjustable from 280 to 520px.
+
+子代理在主会话内展示，可打开只读详情并查看下级代理。思考默认显示紧凑滚动预览，可手动展开；侧栏宽度支持在 280–520px 之间调整。
 
 ## Versioning / 版本
 
@@ -66,7 +76,7 @@ Every GitHub iteration **must** bump `package.json` version and add a bilingual 
 
 每次迭代到 GitHub **必须**升版本号并在 `CHANGELOG.md` 新增中英双语说明。规则见 [`AGENTS.md`](./AGENTS.md)。
 
-Current / 当前：**v0.6.0**
+Current / 当前：**v0.7.0**
 
 ## Safety / 安全
 

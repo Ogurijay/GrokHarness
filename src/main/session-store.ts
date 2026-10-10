@@ -3,7 +3,7 @@ import { readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { SessionSummary } from "../shared/types";
+import type { SessionSummary, SubagentSummary } from "../shared/types";
 
 const execFileAsync = promisify(execFile);
 
@@ -74,6 +74,7 @@ async function readSummary(sessionDir: string, fallbackId: string, fallbackCwd?:
     const updatedAtMs = updatedAt ? Date.parse(updatedAt) || mtimeMs : mtimeMs;
     return {
       sessionId,
+      sessionKind: asString(json?.session_kind),
       cwd,
       title: title || "未命名对话",
       updatedAt,
@@ -118,6 +119,7 @@ function truncateTitle(text: string | undefined): string | undefined {
 }
 
 export async function resolveSessionDir(sessionId: string, cwd?: string): Promise<string | undefined> {
+  if (!SESSION_ID.test(sessionId)) return undefined;
   const root = join(grokHome(), "sessions");
   if (cwd) {
     const direct = join(root, encodeURIComponent(cwd), sessionId);
@@ -144,6 +146,38 @@ export async function resolveSessionDir(sessionId: string, cwd?: string): Promis
   return undefined;
 }
 
+/** Official parent/subagents/<id>/meta.json is the ownership source of truth. */
+export async function listSessionSubagents(sessionId: string, cwd?: string): Promise<SubagentSummary[]> {
+  const parent = await resolveSessionDir(sessionId, cwd);
+  if (!parent) return [];
+  return readSubagentsInDir(parent, sessionId, cwd);
+}
+
+async function readSubagentsInDir(parent: string, parentSessionId: string, cwd?: string): Promise<SubagentSummary[]> {
+  let names: string[];
+  try { names = await readdir(join(parent, "subagents")); } catch { return []; }
+  const rows = await Promise.all(names.filter((id) => SESSION_ID.test(id)).map(async (id) => {
+    try {
+      const meta = asRecord(JSON.parse(await readFile(join(parent, "subagents", id, "meta.json"), "utf8")));
+      if (!meta || (meta.parent_session_id && meta.parent_session_id !== parentSessionId)) return undefined;
+      const child = asString(meta.child_session_id);
+      const number = (key: string) => typeof meta[key] === "number" && Number.isFinite(meta[key]) ? meta[key] as number : undefined;
+      return {
+        id, parentSessionId, sessionId: child && SESSION_ID.test(child) ? child : undefined,
+        cwd: asString(meta.child_cwd) ?? cwd,
+        description: asString(meta.description) ?? asString(meta.subagent_type) ?? "子代理",
+        agentType: asString(meta.subagent_type) ?? "general-purpose",
+        status: asString(meta.status) ?? "unknown", prompt: asString(meta.prompt),
+        startedAt: asString(meta.started_at), completedAt: asString(meta.completed_at),
+        durationMs: number("duration_ms"), toolCalls: number("tool_calls"),
+        modelId: asString(meta.effective_model_id),
+      } satisfies SubagentSummary;
+    } catch { return undefined; }
+  }));
+  return rows.filter((row): row is NonNullable<typeof row> => Boolean(row))
+    .sort((a, b) => (a.startedAt ?? "").localeCompare(b.startedAt ?? "") || a.id.localeCompare(b.id));
+}
+
 /** Read every local grok session under ~/.grok/sessions, across all working directories. */
 export async function listLocalSessions(): Promise<SessionSummary[]> {
   const root = join(grokHome(), "sessions");
@@ -155,6 +189,7 @@ export async function listLocalSessions(): Promise<SessionSummary[]> {
   }
 
   const sessions: SessionSummary[] = [];
+  const ownership = new Map<string, string>();
   for (const groupName of groups) {
     if (groupName.endsWith(".sqlite") || groupName.startsWith(".")) continue;
     const groupDir = join(root, groupName);
@@ -186,9 +221,13 @@ export async function listLocalSessions(): Promise<SessionSummary[]> {
         continue;
       }
       sessions.push(await readSummary(sessionDir, name, groupCwd));
+      for (const child of await readSubagentsInDir(sessionDir, name, groupCwd)) {
+        if (child.sessionId) ownership.set(child.sessionId, name);
+      }
     }
   }
 
+  for (const session of sessions) session.parentSessionId = ownership.get(session.sessionId);
   sessions.sort((a, b) => (b.updatedAtMs ?? 0) - (a.updatedAtMs ?? 0));
   return sessions;
 }

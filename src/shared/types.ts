@@ -116,6 +116,8 @@ export type PermissionRequest = {
 
 export type SessionSummary = {
   sessionId: string;
+  sessionKind?: string;
+  parentSessionId?: string;
   cwd?: string;
   title?: string;
   updatedAt?: string;
@@ -129,6 +131,46 @@ export type SessionSummary = {
   /** Live Grok background tasks (commands / monitors / loops / subagents). */
   running?: boolean;
   backgroundCount?: number;
+};
+
+export type SubagentSummary = {
+  id: string;
+  parentSessionId: string;
+  sessionId?: string;
+  cwd?: string;
+  description: string;
+  agentType: string;
+  status: string;
+  prompt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  toolCalls?: number;
+  modelId?: string;
+};
+
+export type SubagentView = {
+  agent: SubagentSummary;
+  timeline: TimelineItem[];
+  subagents: SubagentSummary[];
+};
+
+export function isMainSession(session: SessionSummary): boolean {
+  return session.sessionKind !== "subagent" && !session.parentSessionId;
+}
+
+export type CustomSessionGroup = { id: string; name: string };
+export type SessionOrganization = {
+  groups: CustomSessionGroup[];
+  assignments: Record<string, string>;
+};
+export type SessionBatchAction = "pin" | "unpin" | "archive" | "unarchive" | "delete" | "move";
+export type SessionBatchResult = {
+  snapshot: AppSnapshot;
+  processedIds: string[];
+  skippedIds: string[];
+  errors: string[];
+  backupPath?: string;
 };
 
 export type UpdateRiskSession = {
@@ -279,6 +321,7 @@ export type AppSnapshot = {
   sessionSort: SessionSort;
   groupOrder: string[];
   sessionOrder: Record<string, string[]>;
+  sessionOrganization?: SessionOrganization;
   account: AccountInfo;
   commands: SlashCommand[];
   settings: GrokSettings;

@@ -3,6 +3,8 @@ import { basename, extname, join } from "node:path";
 import { mkdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { AgentHost } from "./agent-host";
+import { listSessionSubagents } from "./session-store";
+import { readSubagentView } from "./subagents";
 import { DesktopController } from "./desktop";
 import { DESKTOP_RELEASES, GROK_INSTALL_GUIDE } from "../shared/desktop";
 import { copyImageToClipboard, imageDataUrl, inspectPaths, saveAudioBytes, saveClipboardImage } from "./attachments";
@@ -351,8 +353,23 @@ app.whenReady().then(async () => {
     await host.openSession(String(sessionId), cwd ? String(cwd) : undefined);
     return host.getSnapshot();
   });
+  // Read-only child views never call session/load or change the active prompt.
+  ipcMain.handle("grok:listSubagents", (_evt, sessionId: string) => listSessionSubagents(String(sessionId)));
+  ipcMain.handle("grok:readSubagent", (_evt, parentSessionId: string, subagentId: string) => readSubagentView(String(parentSessionId), String(subagentId)));
   ipcMain.handle("grok:refreshSessions", async () => {
     await host.refreshSessions();
+    return host.getSnapshot();
+  });
+  ipcMain.handle("grok:manageSessions", async (_evt, ids: unknown, action: unknown, groupId?: unknown) => {
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) throw new Error("会话选择无效");
+    return host.manageSessions(ids, action as import("../shared/types").SessionBatchAction, typeof groupId === "string" ? groupId : undefined);
+  });
+  ipcMain.handle("grok:saveSessionGroup", (_evt, id: unknown, name: unknown) => {
+    host.saveSessionGroup(typeof id === "string" ? id : undefined, String(name ?? ""));
+    return host.getSnapshot();
+  });
+  ipcMain.handle("grok:removeSessionGroup", (_evt, id: unknown) => {
+    host.removeSessionGroup(String(id));
     return host.getSnapshot();
   });
   ipcMain.handle("grok:renameSession", async (_evt, sessionId: string, title: string) => {
@@ -376,8 +393,8 @@ app.whenReady().then(async () => {
       cancelId: 1,
       noLink: true,
       title: "删除会话",
-      message: "永久删除这个会话？",
-      detail: "会从 grok 历史中删除，无法恢复。",
+      message: "删除这个本地会话？",
+      detail: "会话及其子代理记录将移到 .grok/session-cleanup-backups，保留可恢复备份。不会删除云端历史或项目文件。运行中的会话会跳过。",
     };
     const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
     if (result.response !== 0) return host.getSnapshot();
@@ -401,9 +418,9 @@ app.whenReady().then(async () => {
       noLink: true,
       title: "删除已归档会话",
       message: explicit
-        ? `永久删除已选的 ${count} 个已归档会话？`
-        : `永久删除全部 ${count} 个已归档会话？`,
-      detail: "会从 grok 历史中删除，无法恢复。",
+        ? `删除已选的 ${count} 个本地已归档会话？`
+        : `删除全部 ${count} 个本地已归档会话？`,
+      detail: "保留可恢复备份到 .grok/session-cleanup-backups，云端历史不受影响。运行中的会话会跳过。",
     };
     const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
     if (result.response !== 0) return host.getSnapshot();
@@ -447,7 +464,7 @@ app.whenReady().then(async () => {
       noLink: true,
       title: "删除工作区",
       message: "删除这个工作区的全部会话？",
-      detail: `将删除 ${count} 个会话，无法恢复。不会删除磁盘上的项目文件夹。`,
+      detail: `将删除 ${count} 个本地会话，并保留备份到 .grok/session-cleanup-backups。云端历史和项目文件夹不受影响，运行中的会话会跳过。`,
     };
     const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
     if (result.response !== 0) return host.getSnapshot();
